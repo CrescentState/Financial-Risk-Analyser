@@ -1,48 +1,67 @@
+import html
 import json
 import os
+import re
 import urllib.parse
 import feedparser
-import google.generativeai as genai
-from core.state import State
+import google.genai as genai
+from google.genai.client import configure
+from core.state import State 
+from dotenv import load_dotenv
 
-# Ensure Gemini is configured via environment variables
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+load_dotenv()
+configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+
+def _clean_html_text(raw_html: str) -> str:
+    """Strips HTML tags and unescapes entities from RSS summaries."""
+    if not raw_html:
+        return ""
+    clean_text = re.sub(r"<[^>]+>", " ", raw_html)
+    return html.unescape(clean_text).strip()
+
+
+def _clean_json_response(text: str) -> str:
+    """Removes markdown code block wrappers if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\n?", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\n?```$", "", text)
+    return text.strip()
 
 
 def _validate_sentiment_payload(payload: dict) -> bool:
-    """
-    Validates that the Gemini payload strictly complies with our schema and constraints.
-    """
     if not isinstance(payload, dict):
         return False
-        
+
     required_keys = {"sentiment_score", "key_events", "red_flags", "summary"}
     if not required_keys.issubset(payload.keys()):
         return False
-        
-    # Check types & constraints
+
     if not isinstance(payload["sentiment_score"], (int, float)):
         return False
     if not (-1.0 <= payload["sentiment_score"] <= 1.0):
         return False
-    if not isinstance(payload["key_events"], list) or not all(isinstance(x, str) for x in payload["key_events"]):
+    if not isinstance(payload["key_events"], list) or not all(
+        isinstance(x, str) for x in payload["key_events"]
+    ):
         return False
-    if not isinstance(payload["red_flags"], list) or not all(isinstance(x, str) for x in payload["red_flags"]):
+    if not isinstance(payload["red_flags"], list) or not all(
+        isinstance(x, str) for x in payload["red_flags"]
+    ):
         return False
     if not isinstance(payload["summary"], str):
         return False
-        
+
     return True
 
 
 def news_agent(state: State) -> State:
-    """
-    Agent 2: Google News RSS parsing & Structured Gemini Sentiment Extractor.
-    Gathers last 7 days of financial news by company name and scores sentiment.
-    """
+    """Agent 2: Google News RSS parsing & Structured Gemini Sentiment Extractor."""
     if "errors" not in state:
         state["errors"] = []
-        
+
     news_data = {
         "sentiment_score": None,
         "key_events": [],
@@ -56,18 +75,21 @@ def news_agent(state: State) -> State:
     # =====================================================================
     company_name = state.get("company_name", "").strip()
     if not company_name:
-        # Fall back to ticker symbol if company name is completely absent
         company_name = state.get("ticker", "").strip()
 
     if not company_name:
-        state["errors"].append("Agent 2 failed: No company_name or ticker found in state.")
+        state["errors"].append(
+            "Agent 2 failed: No company_name or ticker found in state."
+        )
         news_data["news_available"] = False
-        state["confidence_score"] = max(0.0, round(state.get("confidence_score", 1.0) - 0.2, 2))
+        state["confidence_score"] = max(
+            0.0, round(state.get("confidence_score", 1.0) - 0.2, 2)
+        )
         state["news_data"] = news_data
         return state
 
-    # Construct highly targeted search query matching strict filters
-    raw_query = f"{company_name} stock OR earnings OR financial when:7d"
+    # FIX 1: Wrap OR conditions in parentheses and quote the company name
+    raw_query = f'"{company_name}" (stock OR earnings OR financial) when:7d'
     encoded_query = urllib.parse.quote(raw_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
@@ -75,32 +97,35 @@ def news_agent(state: State) -> State:
     # STAGE 2: FEED RETRIEVAL AND PARSING
     # =====================================================================
     try:
-        feed = feedparser.parse(rss_url)
+        # FIX 2: Set browser User-Agent so Google RSS doesn't reject feedparser requests
+        feed = feedparser.parse(
+            rss_url,
+            agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         entries = feed.get("entries", [])
     except Exception as e:
-        state["errors"].append(f"Network / parsing failure accessing RSS Feed: {str(e)}")
+        state["errors"].append(f"Network failure accessing RSS Feed: {str(e)}")
         entries = []
 
     if not entries:
-        state["errors"].append(f"No news articles found for query: '{raw_query}'.")
+        state["errors"].append(
+            f"No news articles found for query: '{raw_query}'."
+        )
         news_data["news_available"] = False
-        state["confidence_score"] = max(0.0, round(state.get("confidence_score", 1.0) - 0.2, 2))
+        state["confidence_score"] = max(
+            0.0, round(state.get("confidence_score", 1.0) - 0.2, 2)
+        )
         state["news_data"] = news_data
         return state
 
-    # Cap raw extraction strictly at the first 10 entries
+    # Extract & clean top 10 articles
     extracted_news = []
     for entry in entries[:10]:
         title = entry.get("title", "No Title")
-        summary = entry.get("summary", "No Summary Available")
-        extracted_news.append({"title": title, "summary": summary})
-
-    # =====================================================================
-    # STAGE 3: REDIRECT LINK HANDLING (Abridged)
-    # =====================================================================
-    # NOTE: We deliberately bypass following 'entry.link' redirects here.
-    # The titles and summaries collected in Stage 2 contain all necessary 
-    # and sufficient context to run the downstream sentiment extraction.
+        raw_summary = entry.get("summary", "")
+        # Strip HTML tags out of summary
+        clean_summary = _clean_html_text(raw_summary) or "No Summary Available"
+        extracted_news.append({"title": title, "summary": clean_summary})
 
     # =====================================================================
     # STAGE 4: GEMINI STRUCTURED EXTRACTION
@@ -122,13 +147,9 @@ Articles Data:
 {formatted_articles}
 """
 
-    # We use gemini-1.5-flash as the fast, structurally responsive default
     model = genai.GenerativeModel("gemini-1.5-flash")
-    
-    # Configure generation parameters to force application/json
     generation_config = genai.GenerationConfig(
-        response_mime_type="application/json",
-        temperature=0.1
+        response_mime_type="application/json", temperature=0.1
     )
 
     sentiment_payload = None
@@ -136,66 +157,82 @@ Articles Data:
 
     # Attempt 1
     try:
-        response = model.generate_content(base_prompt, generation_config=generation_config)
-        parsed_json = json.loads(response.text.strip())
+        response = model.generate_content(
+            base_prompt, generation_config=generation_config
+        )
+        cleaned_text = _clean_json_response(response.text)
+        parsed_json = json.loads(cleaned_text)
+
         if _validate_sentiment_payload(parsed_json):
             sentiment_payload = parsed_json
             validation_passed = True
     except Exception as e:
-        state["errors"].append(f"Gemini primary sentiment extraction parsing failed: {str(e)}")
+        state["errors"].append(f"Gemini sentiment primary attempt failed: {str(e)}")
 
-    # Retry 1 (with Stricter Instructions if Validation Failed)
+    # Retry 1
     if not validation_passed:
         retry_prompt = f"""
 {base_prompt}
 
-CRITICAL: Your previous response was invalid. You must strictly output valid JSON.
-- "sentiment_score" MUST be a floating point number strictly between -1.0 and 1.0.
+CRITICAL: You must strictly output valid raw JSON without markdown formatting.
+- "sentiment_score" MUST be a floating point number between -1.0 and 1.0.
 - "key_events" MUST be a flat list of strings.
 - "red_flags" MUST be a flat list of strings.
 - "summary" MUST be a single string.
 """
         try:
-            response_retry = model.generate_content(retry_prompt, generation_config=generation_config)
-            parsed_json_retry = json.loads(response_retry.text.strip())
+            response_retry = model.generate_content(
+                retry_prompt, generation_config=generation_config
+            )
+            cleaned_text_retry = _clean_json_response(response_retry.text)
+            parsed_json_retry = json.loads(cleaned_text_retry)
+
             if _validate_sentiment_payload(parsed_json_retry):
                 sentiment_payload = parsed_json_retry
                 validation_passed = True
             else:
-                state["errors"].append("Gemini structural validation failed again on retry.")
+                state["errors"].append("Gemini structural validation failed on retry.")
         except Exception as e:
-            state["errors"].append(f"Gemini secondary sentiment extraction retry failed: {str(e)}")
+            state["errors"].append(f"Gemini sentiment retry attempt failed: {str(e)}")
 
-    # Handle permanent validation failure
+    # Fallback assignment
     if not validation_passed:
-        state["errors"].append("News sentiment payload validation failed completely. Falling back to degraded state.")
-        news_data.update({
-            "sentiment_score": None,
-            "key_events": [],
-            "red_flags": [],
-            "news_available": True,
-            "summary": None
-        })
+        state["errors"].append(
+            "News sentiment validation failed completely. Degraded state recorded."
+        )
+        news_data.update(
+            {
+                "sentiment_score": None,
+                "key_events": [],
+                "red_flags": [],
+                "news_available": True,
+                "summary": None,
+            }
+        )
     else:
-        # Populate verified values
-        news_data.update({
-            "sentiment_score": float(sentiment_payload["sentiment_score"]),
-            "key_events": sentiment_payload["key_events"],
-            "red_flags": sentiment_payload["red_flags"],
-            "news_available": True,
-            "summary": sentiment_payload["summary"]
-        })
+        news_data.update(
+            {
+                "sentiment_score": float(sentiment_payload["sentiment_score"]),
+                "key_events": sentiment_payload["key_events"],
+                "red_flags": sentiment_payload["red_flags"],
+                "news_available": True,
+                "summary": sentiment_payload["summary"],
+            }
+        )
 
     # =====================================================================
-    # STAGE 5: STATE UPDATE & ADAPTIVE CONFIDENCE SCORES
+    # STAGE 5: STATE UPDATE
     # =====================================================================
     state["news_data"] = news_data
-    
-    # Assess overall news hospitality
+
     score = news_data.get("sentiment_score")
     if score is not None and score < -0.5:
         current_confidence = state.get("confidence_score", 1.0)
-        state["confidence_score"] = max(0.0, round(current_confidence - 0.1, 2))
-        state["errors"].append(f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked.")
+        state["confidence_score"] = max(
+            0.0, round(current_confidence - 0.1, 2)
+        )
+        state["errors"].append(
+            f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked."
+        )
 
     return state
