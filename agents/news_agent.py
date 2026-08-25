@@ -1,29 +1,32 @@
+import asyncio
+import calendar
 import html
 import json
-import os
+import sys
 import re
+import time
 import urllib.parse
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import feedparser
-import google.genai as genai
-from google.genai.client import configure
-from core.state import State 
-from dotenv import load_dotenv
+import requests
+from google import genai
+from google.genai import types
 
-
-load_dotenv()
-configure(api_key=os.getenv("GEMINI_API_KEY"))
+from core.state import SystemState, NewsData
+from core.config import settings
+from core.clients import gemini_client
 
 
 def _clean_html_text(raw_html: str) -> str:
-    """Strips HTML tags and unescapes entities from RSS summaries."""
     if not raw_html:
         return ""
     clean_text = re.sub(r"<[^>]+>", " ", raw_html)
-    return html.unescape(clean_text).strip()
+    clean_text = html.unescape(clean_text)
+    return re.sub(r"\s+", " ", clean_text).strip()
 
 
 def _clean_json_response(text: str) -> str:
-    """Removes markdown code block wrappers if present."""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\n?", "", text, flags=re.IGNORECASE)
@@ -41,7 +44,7 @@ def _validate_sentiment_payload(payload: dict) -> bool:
 
     if not isinstance(payload["sentiment_score"], (int, float)):
         return False
-    if not (-1.0 <= payload["sentiment_score"] <= 1.0):
+    if not (-1.0 <= float(payload["sentiment_score"]) <= 1.0):
         return False
     if not isinstance(payload["key_events"], list) or not all(
         isinstance(x, str) for x in payload["key_events"]
@@ -57,79 +60,94 @@ def _validate_sentiment_payload(payload: dict) -> bool:
     return True
 
 
-def news_agent(state: State) -> State:
-    """Agent 2: Google News RSS parsing & Structured Gemini Sentiment Extractor."""
-    if "errors" not in state:
-        state["errors"] = []
+async def news_agent_async(state: dict) -> dict:
+    """Async News & Sentiment Agent with non-blocking RSS fetch and Gemini call."""
+    errors = list(state.get("errors", []))
 
     news_data = {
-        "sentiment_score": None,
+        "sentiment_score": 0.0,
         "key_events": [],
         "red_flags": [],
         "news_available": True,
-        "summary": None,
+        "summary": "",
     }
 
-    # =====================================================================
-    # STAGE 1: QUERY CONSTRUCTION
-    # =====================================================================
     company_name = state.get("company_name", "").strip()
     if not company_name:
         company_name = state.get("ticker", "").strip()
 
     if not company_name:
-        state["errors"].append(
-            "Agent 2 failed: No company_name or ticker found in state."
-        )
+        errors.append("Agent 2 failed: No company_name or ticker found in state.")
         news_data["news_available"] = False
-        state["confidence_score"] = max(
-            0.0, round(state.get("confidence_score", 1.0) - 0.2, 2)
-        )
-        state["news_data"] = news_data
-        return state
+        news_data["sentiment_score"] = 0.0
+        return {
+            **state,
+            "news_data": news_data,
+            "errors": errors,
+            "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
+        }
 
-    # FIX 1: Wrap OR conditions in parentheses and quote the company name
-    raw_query = f'"{company_name}" (stock OR earnings OR financial) when:7d'
+    # Query: when:30d to match NEWS_LOOKBACK_DAYS
+    raw_query = f'"{company_name}" (stock OR earnings OR financial) when:30d'
     encoded_query = urllib.parse.quote(raw_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
-    # =====================================================================
-    # STAGE 2: FEED RETRIEVAL AND PARSING
-    # =====================================================================
+    # Non-blocking RSS fetch via requests.get with timeout=5
     try:
-        # FIX 2: Set browser User-Agent so Google RSS doesn't reject feedparser requests
-        feed = feedparser.parse(
+        resp = await asyncio.to_thread(
+            requests.get,
             rss_url,
-            agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=5.0
         )
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
         entries = feed.get("entries", [])
     except Exception as e:
-        state["errors"].append(f"Network failure accessing RSS Feed: {str(e)}")
+        errors.append(f"Network failure accessing RSS Feed: {str(e)}")
         entries = []
 
-    if not entries:
-        state["errors"].append(
-            f"No news articles found for query: '{raw_query}'."
+    # UTC-Safe Date Filtering using email.utils.parsedate_to_datetime
+    current_time = datetime.now(timezone.utc)
+    cutoff_seconds = settings.NEWS_LOOKBACK_DAYS * 86400
+    valid_entries = []
+
+    for entry in entries:
+        published = entry.get("published") or entry.get("updated")
+        if published:
+            try:
+                dt = parsedate_to_datetime(published)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                else:
+                    dt = dt.astimezone(timezone.utc)
+                if (current_time - dt).total_seconds() <= cutoff_seconds:
+                    valid_entries.append(entry)
+            except Exception:
+                valid_entries.append(entry)  # Keep if parse fails
+        else:
+            valid_entries.append(entry)
+
+    if not valid_entries:
+        errors.append(
+            f"No news articles within {settings.NEWS_LOOKBACK_DAYS} days found for: '{raw_query}'."
         )
         news_data["news_available"] = False
-        state["confidence_score"] = max(
-            0.0, round(state.get("confidence_score", 1.0) - 0.2, 2)
-        )
-        state["news_data"] = news_data
-        return state
+        news_data["sentiment_score"] = 0.0  # fallback to 0.0, not None
+        return {
+            **state,
+            "news_data": news_data,
+            "errors": errors,
+            "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
+        }
 
-    # Extract & clean top 10 articles
     extracted_news = []
-    for entry in entries[:10]:
+    for entry in valid_entries[:settings.MAX_NEWS_ARTICLES]:
         title = entry.get("title", "No Title")
         raw_summary = entry.get("summary", "")
-        # Strip HTML tags out of summary
         clean_summary = _clean_html_text(raw_summary) or "No Summary Available"
         extracted_news.append({"title": title, "summary": clean_summary})
 
-    # =====================================================================
-    # STAGE 4: GEMINI STRUCTURED EXTRACTION
-    # =====================================================================
     formatted_articles = ""
     for idx, article in enumerate(extracted_news, 1):
         formatted_articles += f"--- ARTICLE {idx} ---\nTitle: {article['title']}\nSummary: {article['summary']}\n\n"
@@ -147,18 +165,21 @@ Articles Data:
 {formatted_articles}
 """
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    generation_config = genai.GenerationConfig(
-        response_mime_type="application/json", temperature=0.1
+    gen_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        temperature=0.1,
     )
 
     sentiment_payload = None
     validation_passed = False
 
-    # Attempt 1
+    # Non-blocking Gemini call via thread pool
     try:
-        response = model.generate_content(
-            base_prompt, generation_config=generation_config
+        response = await asyncio.to_thread(
+            gemini_client.models.generate_content,
+            model=settings.GEMINI_MODEL,
+            contents=base_prompt,
+            config=gen_config,
         )
         cleaned_text = _clean_json_response(response.text)
         parsed_json = json.loads(cleaned_text)
@@ -167,22 +188,24 @@ Articles Data:
             sentiment_payload = parsed_json
             validation_passed = True
     except Exception as e:
-        state["errors"].append(f"Gemini sentiment primary attempt failed: {str(e)}")
+        errors.append(f"Gemini sentiment primary attempt failed: {str(e)}")
 
-    # Retry 1
     if not validation_passed:
         retry_prompt = f"""
 {base_prompt}
 
-CRITICAL: You must strictly output valid raw JSON without markdown formatting.
+CRITICAL: Output raw JSON strictly matching the field requirements:
 - "sentiment_score" MUST be a floating point number between -1.0 and 1.0.
 - "key_events" MUST be a flat list of strings.
 - "red_flags" MUST be a flat list of strings.
 - "summary" MUST be a single string.
 """
         try:
-            response_retry = model.generate_content(
-                retry_prompt, generation_config=generation_config
+            response_retry = await asyncio.to_thread(
+                gemini_client.models.generate_content,
+                model=settings.GEMINI_MODEL,
+                contents=retry_prompt,
+                config=gen_config,
             )
             cleaned_text_retry = _clean_json_response(response_retry.text)
             parsed_json_retry = json.loads(cleaned_text_retry)
@@ -191,48 +214,55 @@ CRITICAL: You must strictly output valid raw JSON without markdown formatting.
                 sentiment_payload = parsed_json_retry
                 validation_passed = True
             else:
-                state["errors"].append("Gemini structural validation failed on retry.")
+                errors.append("Gemini structural validation failed on retry.")
         except Exception as e:
-            state["errors"].append(f"Gemini sentiment retry attempt failed: {str(e)}")
+            errors.append(f"Gemini sentiment retry attempt failed: {str(e)}")
 
     # Fallback assignment
     if not validation_passed:
-        state["errors"].append(
-            "News sentiment validation failed completely. Degraded state recorded."
-        )
-        news_data.update(
-            {
-                "sentiment_score": None,
-                "key_events": [],
-                "red_flags": [],
-                "news_available": True,
-                "summary": None,
-            }
-        )
+        errors.append("News sentiment validation failed completely. Degraded state recorded.")
+        news_data.update({
+            "sentiment_score": 0.0,  # fallback to 0.0, not None
+            "key_events": [],
+            "red_flags": [],
+            "news_available": False,
+            "summary": "",
+        })
     else:
-        news_data.update(
-            {
-                "sentiment_score": float(sentiment_payload["sentiment_score"]),
-                "key_events": sentiment_payload["key_events"],
-                "red_flags": sentiment_payload["red_flags"],
-                "news_available": True,
-                "summary": sentiment_payload["summary"],
-            }
-        )
-
-    # =====================================================================
-    # STAGE 5: STATE UPDATE
-    # =====================================================================
-    state["news_data"] = news_data
+        news_data.update({
+            "sentiment_score": float(sentiment_payload["sentiment_score"]),
+            "key_events": sentiment_payload["key_events"],
+            "red_flags": sentiment_payload["red_flags"],
+            "news_available": True,
+            "summary": sentiment_payload["summary"],
+        })
 
     score = news_data.get("sentiment_score")
-    if score is not None and score < -0.5:
-        current_confidence = state.get("confidence_score", 1.0)
-        state["confidence_score"] = max(
-            0.0, round(current_confidence - 0.1, 2)
-        )
-        state["errors"].append(
-            f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked."
-        )
+    new_confidence = state.get("confidence_score", 1.0)
+    # Threshold: -0.4 (not -0.5)
+    if score is not None and score < settings.HOSTILE_NEWS_THRESHOLD:
+        new_confidence = max(0.0, round(new_confidence - 0.1, 2))
+        errors.append(f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked.")
 
-    return state
+    return {
+        **state,
+        "news_data": news_data,
+        "errors": errors,
+        "confidence_score": new_confidence,
+    }
+
+
+def news_agent_sync(state: dict) -> dict:
+    """Synchronous wrapper for LangGraph sync node compatibility.
+    
+    In test mode, runs directly without thread pool to allow mock patches to work.
+    """
+    test_mode = getattr(sys.modules.get('agents.news_agent', {}), '_TEST_MODE_OVERRIDE', False)
+    
+    if test_mode:
+        return asyncio.run(news_agent_async(state))
+    
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, news_agent_async(state))
+        return future.result()
