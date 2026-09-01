@@ -1,0 +1,13 @@
+{
+  "name": "financial-risk-analyser",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"python -m uvicorn main:app --port 8000 --reload\" \"streamlit run frontend/app.py --server.port 8501\"",
+    "backend": "python -m uvicorn main:app --port 8000 --reload",
+    "frontend": "streamlit run frontend/app.py --server.port 8501"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

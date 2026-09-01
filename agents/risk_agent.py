@@ -61,7 +61,7 @@ def _calculate_risk_score(factors: list[str]) -> float:
 
 async def risk_agent_async(state: dict) -> dict:
     """Agent 3: Hybrid Risk Agent combining rule engine with LLM synthesis."""
-    errors = list(state.get("errors", []))
+    new_errors = list(state.get("errors", []))  # Accumulate: read input errors + add new
 
     financial_data = state.get("financial_data", {})
     news_data = state.get("news_data", {})
@@ -122,7 +122,7 @@ Do NOT output scores or new factors.
         else:
             risk_narrative = parsed.risk_narrative
     except Exception as e:
-        errors.append(f"Risk Agent execution failed: {str(e)}")
+        new_errors.append(f"Risk Agent execution failed: {str(e)}")
         risk_narrative = ""
 
     # Build risk_data with Python-calculated score and LLM narrative
@@ -139,7 +139,7 @@ Do NOT output scores or new factors.
     }
 
     # Fallback: only if LLM failed (error occurred), use fallback score of 50
-    if not risk_narrative and errors:
+    if not risk_narrative and new_errors:
         risk_data = {
             "risk_score": 50.0,
             "risk_factors": risk_factors,
@@ -149,7 +149,7 @@ Do NOT output scores or new factors.
     return {
         **state,
         "risk_data": risk_data,
-        "errors": errors,
+        "errors": new_errors,
     }
 
 

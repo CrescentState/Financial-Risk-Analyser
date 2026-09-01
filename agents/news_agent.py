@@ -62,7 +62,7 @@ def _validate_sentiment_payload(payload: dict) -> bool:
 
 async def news_agent_async(state: dict) -> dict:
     """Async News & Sentiment Agent with non-blocking RSS fetch and Gemini call."""
-    errors = list(state.get("errors", []))
+    new_errors = []
 
     news_data = {
         "sentiment_score": 0.0,
@@ -77,13 +77,13 @@ async def news_agent_async(state: dict) -> dict:
         company_name = state.get("ticker", "").strip()
 
     if not company_name:
-        errors.append("Agent 2 failed: No company_name or ticker found in state.")
+        new_errors.append("Agent 2 failed: No company_name or ticker found in state.")
         news_data["news_available"] = False
         news_data["sentiment_score"] = 0.0
         return {
             **state,
             "news_data": news_data,
-            "errors": errors,
+            "errors": new_errors,
             "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
         }
 
@@ -104,7 +104,7 @@ async def news_agent_async(state: dict) -> dict:
         feed = feedparser.parse(resp.content)
         entries = feed.get("entries", [])
     except Exception as e:
-        errors.append(f"Network failure accessing RSS Feed: {str(e)}")
+        new_errors.append(f"Network failure accessing RSS Feed: {str(e)}")
         entries = []
 
     # UTC-Safe Date Filtering using email.utils.parsedate_to_datetime
@@ -129,7 +129,7 @@ async def news_agent_async(state: dict) -> dict:
             valid_entries.append(entry)
 
     if not valid_entries:
-        errors.append(
+        new_errors.append(
             f"No news articles within {settings.NEWS_LOOKBACK_DAYS} days found for: '{raw_query}'."
         )
         news_data["news_available"] = False
@@ -137,7 +137,7 @@ async def news_agent_async(state: dict) -> dict:
         return {
             **state,
             "news_data": news_data,
-            "errors": errors,
+            "errors": new_errors,
             "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
         }
 
@@ -188,7 +188,7 @@ Articles Data:
             sentiment_payload = parsed_json
             validation_passed = True
     except Exception as e:
-        errors.append(f"Gemini sentiment primary attempt failed: {str(e)}")
+        new_errors.append(f"Gemini sentiment primary attempt failed: {str(e)}")
 
     if not validation_passed:
         retry_prompt = f"""
@@ -214,13 +214,13 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
                 sentiment_payload = parsed_json_retry
                 validation_passed = True
             else:
-                errors.append("Gemini structural validation failed on retry.")
+                new_errors.append("Gemini structural validation failed on retry.")
         except Exception as e:
-            errors.append(f"Gemini sentiment retry attempt failed: {str(e)}")
+            new_errors.append(f"Gemini sentiment retry attempt failed: {str(e)}")
 
     # Fallback assignment
     if not validation_passed:
-        errors.append("News sentiment validation failed completely. Degraded state recorded.")
+        new_errors.append("News sentiment validation failed completely. Degraded state recorded.")
         news_data.update({
             "sentiment_score": 0.0,  # fallback to 0.0, not None
             "key_events": [],
@@ -242,12 +242,12 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
     # Threshold: -0.4 (not -0.5)
     if score is not None and score < settings.HOSTILE_NEWS_THRESHOLD:
         new_confidence = max(0.0, round(new_confidence - 0.1, 2))
-        errors.append(f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked.")
+        new_errors.append(f"Hostile news environment caught for {company_name} (Score: {score}). Confidence docked.")
 
     return {
         **state,
         "news_data": news_data,
-        "errors": errors,
+        "errors": new_errors,
         "confidence_score": new_confidence,
     }
 

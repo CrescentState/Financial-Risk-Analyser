@@ -216,7 +216,7 @@ async def _fetch_yfinance(ticker: str) -> dict:
 async def financial_agent_async(state: dict) -> dict:
     """Async Financial Risk Agent node with full Alpha Vantage integration + yfinance fallback."""
     ticker = state.get("ticker", "").strip().upper()
-    errors = list(state.get("errors", []))
+    new_errors = []
     confidence = 1.0
 
     fd = {
@@ -239,14 +239,14 @@ async def financial_agent_async(state: dict) -> dict:
     # Check for rate limit / throttle - trigger yfinance fallback
     overview_failed = False
     if "error" in overview_data:
-        errors.append(overview_data["error"])
+        new_errors.append(overview_data["error"])
         overview_failed = True
     elif "Note" in overview_data or "Information" in overview_data:
-        errors.append("Alpha Vantage Throttle")
+        new_errors.append("Alpha Vantage Throttle")
         confidence -= 0.2
         overview_failed = True
     elif not overview_data or "Error Message" in overview_data:
-        errors.append(f"Invalid US Equity Ticker or empty profile for {ticker}.")
+        new_errors.append(f"Invalid US Equity Ticker or empty profile for {ticker}.")
         overview_failed = True
 
     # Extract with clean_float and normalization (if overview succeeded)
@@ -281,6 +281,9 @@ async def financial_agent_async(state: dict) -> dict:
 
     # INCOME STATEMENT for yoy_revenue_growth (only if not using yfinance fallback)
     if not overview_failed:
+        # Small delay to respect Alpha Vantage rate limit (5 req/min free tier)
+        if not _is_test_mode():
+            await asyncio.sleep(1.5)
         income_data, income_was_live = await _fetch_alpha_vantage_async("INCOME_STATEMENT", ticker)
         if "Note" not in income_data and "Information" not in income_data and "error" not in income_data:
             annual_reports = income_data.get("annualReports", [])
@@ -299,8 +302,11 @@ async def financial_agent_async(state: dict) -> dict:
                         fd["yoy_revenue_growth"] = (rev_curr - rev_prev) / rev_prev
                         fd["revenue_growth"] = fd["yoy_revenue_growth"]  # backward compat
 
-    # BALANCE SHEET for current_ratio and cash_position (only if not using yfinance fallback)
+    # BALANCE SHEET for current_ratio, cash_position, and debt_to_equity (only if not using yfinance fallback)
     if not overview_failed:
+        # Small delay to respect Alpha Vantage rate limit (5 req/min free tier)
+        if not _is_test_mode():
+            await asyncio.sleep(1.5)
         balance_data, balance_was_live = await _fetch_alpha_vantage_async("BALANCE_SHEET", ticker)
         if "Note" not in balance_data and "Information" not in balance_data and "error" not in balance_data:
             annual_bal = balance_data.get("annualReports", [])
@@ -312,6 +318,17 @@ async def financial_agent_async(state: dict) -> dict:
                     fd["current_ratio"] = ca / cl
                 raw_cash = latest.get("cashAndCashEquivalentsAtCarryingValue") or latest.get("cash")
                 fd["cash_position"] = clean_float(raw_cash)
+
+                # Calculate debt_to_equity from balance sheet: (shortTermDebt + longTermDebt) / totalShareholderEquity
+                short_debt = clean_float(latest.get("shortTermDebt"))
+                long_debt = clean_float(latest.get("longTermDebt")) or clean_float(latest.get("longTermDebtNoncurrent"))
+                equity = clean_float(latest.get("totalShareholderEquity"))
+                if short_debt is not None and long_debt is not None and equity and equity > 0:
+                    total_debt = short_debt + long_debt
+                    fd["debt_to_equity"] = total_debt / equity
+                elif short_debt is not None and equity and equity > 0:
+                    # Fallback if only short term debt available
+                    fd["debt_to_equity"] = short_debt / equity
 
     # COMPLETENESS ASSESSMENT - include current_ratio per contract
     required = [fd.get("revenue"), fd.get("market_cap"), fd.get("debt_to_equity"), fd.get("yoy_revenue_growth"), fd.get("current_ratio")]
@@ -331,7 +348,7 @@ async def financial_agent_async(state: dict) -> dict:
         "ticker": ticker,
         "company_name": company_name,
         "financial_data": fd,
-        "errors": errors,
+        "errors": new_errors,
         "confidence_score": max(0.0, round(confidence, 2)),
     }
 

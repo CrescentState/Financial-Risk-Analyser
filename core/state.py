@@ -1,5 +1,9 @@
 from typing import Annotated, List, Optional, TypedDict
-import operator
+
+
+def _errors_reducer(left: List[str], right: List[str]) -> List[str]:
+    """Reducer that returns the right (latest) value - each agent returns the full accumulated error list."""
+    return right
 
 
 class FinancialData(TypedDict):
@@ -42,7 +46,7 @@ class SystemState(TypedDict):
     risk_data: RiskData
     synthesis_report: SynthesisBrief
     confidence_score: float
-    errors: Annotated[List[str], operator.add]
+    errors: Annotated[List[str], _errors_reducer]
 
 
 def init_state(ticker: str) -> SystemState:

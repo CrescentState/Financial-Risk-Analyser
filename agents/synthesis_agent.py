@@ -58,7 +58,7 @@ async def synthesis_agent_async(state: dict) -> dict:
     Consolidates financial metrics, market sentiment, and risk evaluation into a unified,
     actionable investment brief per the 6-section SynthesisBrief contract.
     """
-    errors = list(state.get("errors", []))
+    new_errors = list(state.get("errors", []))  # Accumulate: read input errors + add new
     ticker = state.get("ticker", "UNKNOWN").strip().upper()
     company_name = state.get("company_name", ticker)
     confidence_score = float(state.get("confidence_score", 1.0))
@@ -86,7 +86,7 @@ Risk Analysis Engine Output:
 {json.dumps(risk_data, indent=2)}
 
 Audit Trail / Identified Pipeline Errors:
-{json.dumps(errors, indent=2)}
+{json.dumps(state.get("errors", []), indent=2)}
 
 Calculated Confidence Score: {confidence_score:.2f} / 1.00
 Deterministic Recommendation (DO NOT CHANGE): {recommendation}
@@ -159,7 +159,7 @@ Return ONLY a JSON object with these 6 fields. Do not include any other fields.
             }
 
     except Exception as e:
-        errors.append(f"Synthesis Agent execution failed: {str(e)}")
+        new_errors.append(f"Synthesis Agent execution failed: {str(e)}")
         synthesis_brief["key_concerns"].append(f"System Exception: {str(e)}")
 
     # Return state with synthesis_report key (per contract) and updated confidence/errors
@@ -167,7 +167,7 @@ Return ONLY a JSON object with these 6 fields. Do not include any other fields.
         **state,
         "synthesis_report": synthesis_brief,
         "confidence_score": confidence_score,
-        "errors": errors,
+        "errors": new_errors,
     }
 
 

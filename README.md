@@ -13,6 +13,8 @@
 - **Sub-Second Execution** (with cache): 24-hour TTL file cache eliminates repeated Alpha Vantage calls
 - **Fallback Resilience**: yfinance fallback on rate limits, degraded LLM responses with deterministic overrides, graceful confidence docking
 - **Audit Trail**: Append-only error log, confidence scoring (1.0 → 0.0), full pipeline traceability
+- **Alpha Vantage Rate Limit Handling**: 1.5s delays between calls respect 5 req/min free tier; cache prevents repeated hits
+- **Complete Debt-to-Equity Calculation**: Derived from BALANCE_SHEET (shortTermDebt + longTermDebt) / totalShareholderEquity since OVERVIEW omits it
 
 ### What It Can Do
 - Fetch real-time fundamentals (revenue, P/E, D/E, YoY growth, current ratio, market cap, cash position) from Alpha Vantage
@@ -83,7 +85,7 @@
 
 | Agent | Primary Source | Key Outputs | Fallback Behavior |
 |-------|---------------|-------------|-------------------|
-| **Financial** | Alpha Vantage (OVERVIEW, INCOME_STATEMENT, BALANCE_SHEET) | 11 fields: revenue, net_income, pe_ratio, debt_to_equity, yoy_revenue_growth, current_ratio, market_cap, cash_position, data_available, company_name | yfinance (3s timeout) on 429/timeout; `data_available=False`, confidence -0.4 |
+| **Financial** | Alpha Vantage (OVERVIEW, INCOME_STATEMENT, BALANCE_SHEET) | 11 fields: revenue, net_income, pe_ratio, debt_to_equity, yoy_revenue_growth, current_ratio, market_cap, cash_position, data_available, company_name | yfinance (3s timeout) on 429/timeout; `data_available=False`, confidence -0.4. **Debt-to-Equity calculated from BALANCE_SHEET** (OVERVIEW doesn't provide it) |
 | **News** | Google News RSS + Gemini Flash | sentiment_score (-1.0 to 1.0), key_events[], red_flags[], summary, news_available | `sentiment_score=0.0`, `news_available=False`, confidence -0.1 |
 | **Risk** | Python Rules + Gemini Flash | risk_score (0-100), risk_factors[], risk_narrative | `risk_score=50.0`, narrative="unavailable" |
 | **Synthesis** | Deterministic Python + Gemini Flash | SynthesisBrief (6 sections), analyst_recommendation | Fallback brief with deterministic label |
@@ -354,7 +356,80 @@ python -m pytest tests/test_pipeline_integration.py -v # 14 tests
 
 ---
 
-## 9. License
+## 9. Alpha Vantage Rate Limit Handling
+
+### Free Tier Constraints
+- **25 requests/day** total
+- **5 requests/minute** burst limit
+- 3 calls per analysis (OVERVIEW, INCOME_STATEMENT, BALANCE_SHEET) = ~8 analyses/day max
+
+### Implemented Solutions
+
+1. **Automatic 1.5s Delays**: Between sequential API calls in `financial_agent.py` to respect 5 req/min limit
+2. **24-Hour File Cache**: Successful responses cached; subsequent analyses use cached data (sub-second)
+3. **Test Mode Bypass**: Delays skipped when `_TEST_MODE_OVERRIDE=True` for fast CI/CD (tests complete in ~1s)
+4. **Cache Rejects Errors**: Rate-limit responses (`{"Note": "..."}`) not cached to avoid poisoning cache
+
+### Behavior
+| Scenario | Behavior |
+|----------|----------|
+| Warm cache (≤24hr) | Sub-second, no API calls |
+| Cold cache | ~3.5s total (1.5s + 1.5s delays), all 3 endpoints cached |
+| Rate limited | Falls back to yfinance; confidence docked -0.2/-0.4 |
+
+---
+
+## 10. Debt-to-Equity Calculation
+
+**Alpha Vantage OVERVIEW endpoint does not return `DebtToEquity`.** The pipeline calculates it from BALANCE_SHEET:
+
+```
+Debt-to-Equity = (shortTermDebt + longTermDebt) / totalShareholderEquity
+```
+
+- Uses `shortTermDebt` + `longTermDebt` (or `longTermDebtNoncurrent` fallback)
+- Falls back to `shortTermDebt / equity` if long-term debt unavailable
+- Normalized by `normalize_debt_to_equity()` to handle percentage vs ratio formats
+
+---
+
+## 12. Testing Suite
+
+### Run Tests
+```bash
+# All tests (79 tests)
+python -m pytest tests/ -v
+
+# Individual suites
+python -m pytest tests/test_financial_agent.py -v     # 18 tests
+python -m pytest tests/test_news_agent.py -v          # 27 tests
+python -m pytest tests/test_risk_agent.py -v          # 14 tests
+python -m pytest tests/test_synthesis_agent.py -v     # 6 tests
+python -m pytest tests/test_pipeline_integration.py -v # 14 tests
+```
+
+### Test Coverage Summary
+
+| Test Suite | Tests | Coverage Focus |
+|------------|-------|----------------|
+| `test_financial_agent.py` | 18 | Cache, fallback, edge cases (invalid/delisted/non-US), field normalization |
+| `test_news_agent.py` | 27 | RSS parsing, UTC dates, schema validation, retry, hostile sentiment, error accumulation |
+| `test_risk_agent.py` | 14 | Deterministic rules (boundaries, None-safety), LLM narrative, fallback |
+| `test_synthesis_agent.py` | 6 | Label logic (boundaries), programmatic override, malformed JSON fallback |
+| `test_pipeline_integration.py` | 14 | E2E mock pipeline, recommendation logic, state preservation |
+
+**Total: 79 tests, 100% pass rate**
+
+### Key Test Scenarios
+- Boundary conditions: confidence=0.5, risk=70.0, growth=0.05, D/E=2.5
+- Missing data: `yoy_revenue_growth=None`, negative growth blocks Strong Buy
+- Error accumulation: prior errors preserved through pipeline
+- LLM hallucination override: "MUST BUY IMMEDIATELY!!!" → corrected to deterministic label
+- Cache behavior: hit/miss, rate-limit rejection, corruption handling
+
+---
+
+## 13. License
 
 ### License
 MIT License — see `LICENSE` file for details.

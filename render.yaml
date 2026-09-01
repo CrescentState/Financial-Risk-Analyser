@@ -1,0 +1,39 @@
+# Render Deployment Configuration
+# Deploy as two services: backend (Web Service) + frontend (Static Site or separate Web Service)
+
+services:
+  # Backend API Service
+  - type: web
+    name: financial-risk-analyser-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: USE_MOCK_DATA
+        value: "false"
+    healthCheckPath: /health
+    autoDeploy: true
+
+  # Frontend (Streamlit) - Deploy as separate Web Service
+  - type: web
+    name: financial-risk-analyser-frontend
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run frontend/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: API_BASE_URL
+        value: https://financial-risk-analyser-api.onrender.com/api/v1
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
