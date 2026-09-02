@@ -45,7 +45,6 @@ htmlcov/
 
 # Cache
 cache/
-*.json
 
 # Logs
 *.log
@@ -83,9 +82,10 @@ run.sh
 .env
 .env.local
 
-# Package
+# Root package files (keep frontend/package*.json)
 package.json
 package-lock.json
+!frontend/package*.json
 
 # TypeScript
 tsconfig*.json

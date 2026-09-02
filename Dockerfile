@@ -1,19 +1,29 @@
 # Multi-stage Dockerfile for Financial Risk Analyser
-# --- Stage 1: Build Frontend (React) ---
+# Build with: docker build -t financial-risk-analyser .
+# Context: project root (where this Dockerfile lives)
+
+# =============================================================================
+# Stage 1: Build Frontend (React + Vite)
+# =============================================================================
 FROM node:20-alpine AS frontend-builder
 
-WORKDIR /app/frontend
+WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package files from frontend directory
 COPY frontend/package*.json ./
-RUN npm install
+RUN npm ci
 
-# Copy frontend source and build
-COPY frontend/ ./
-RUN npm run build
+# Copy frontend source
+COPY frontend/ ./frontend/
+
+# Build frontend - Vite outputs to /app/static (per vite.config.ts outDir: '../static')
+WORKDIR /app/frontend
+RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 
-# --- Stage 2: Python Build ---
+# =============================================================================
+# Stage 2: Python Dependencies
+# =============================================================================
 FROM python:3.11-slim AS python-builder
 
 WORKDIR /app
@@ -26,12 +36,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files and build virtual environment
+# Copy dependency files
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-cache --no-dev
 
 
-# --- Stage 3: Runtime ---
+# =============================================================================
+# Stage 3: Runtime
+# =============================================================================
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
@@ -45,17 +57,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy virtual environment from python-builder
 COPY --from=python-builder /app/.venv /app/.venv
 
-# Copy built React static files from frontend-builder
+# Copy built React static files from frontend-builder (Vite outputs to /app/static)
 COPY --from=frontend-builder /app/static ./static
 
-# Copy application files (only needed files)
+# Copy application source code
 COPY --chown=appuser:appuser main.py ./
 COPY --chown=appuser:appuser api/ ./api/
 COPY --chown=appuser:appuser core/ ./core/
 COPY --chown=appuser:appuser agents/ ./agents/
 COPY --chown=appuser:appuser .env.example ./
 
-# Create cache directory with correct ownership
+# Create cache directory
 RUN mkdir -p /app/cache && chown -R appuser:appuser /app
 
 USER appuser
@@ -63,17 +75,17 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Set virtual environment path
+# Environment
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Dynamic Health Check using PORT env
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Shell-form CMD to allow environment variable expansion ($PORT)
+# Start server
 CMD exec gunicorn main:app \
     --workers 2 \
     --worker-class uvicorn.workers.UvicornWorker \

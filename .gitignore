@@ -50,7 +50,6 @@ htmlcov/
 cache/
 *.cache
 *.log
-*.json
 
 # OS
 .DS_Store
