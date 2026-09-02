@@ -1,0 +1,187 @@
+.risk-gauge-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  overflow: hidden; /* prevent any overflow */
+}
+
+.gauge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
+}
+
+.gauge-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #111827;
+  margin: 0;
+}
+
+.risk-level {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: white;
+  flex-shrink: 0;
+}
+
+.gauge-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  width: 100%;
+  overflow: hidden;
+}
+
+.gauge-chart {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  min-width: 0;
+  overflow: hidden;
+  contain: layout paint; /* strict containment */
+}
+
+.gauge-chart .plotly-graph-div,
+.gauge-chart .plotly-graph-div > div {
+  width: 100% !important;
+  max-width: 280px !important;
+  height: auto !important;
+}
+
+.gauge-chart .plotly-graph-div .plotly-graph-div {
+  max-width: 280px !important;
+}
+
+.risk-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.risk-section {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 1.25rem;
+  overflow: hidden;
+  word-wrap: break-word;
+}
+
+.risk-section h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111827;
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.risk-factors {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.risk-factors li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  font-size: 0.9375rem;
+  color: #1f2937;
+  line-height: 1.6;
+  padding: 0.5rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  border-left: 3px solid #ef4444;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.factor-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex-shrink: 0;
+  margin-top: 0.5rem;
+}
+
+.no-factors {
+  color: #00C851;
+  font-weight: 500;
+  margin: 0;
+  padding: 1rem;
+  background: #f0fdf4;
+  border-radius: 8px;
+  border: 1px solid #bbf7d0;
+}
+
+.risk-narrative {
+  margin: 0;
+  color: #374151;
+  line-height: 1.7;
+  font-size: 0.9375rem;
+  background: #f9fafb;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+.raw-data-toggle {
+  margin-top: 1rem;
+}
+
+.raw-data-toggle summary {
+  cursor: pointer;
+  color: #6b7280;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.5rem 0;
+  user-select: none;
+}
+
+.raw-data-toggle summary:hover {
+  color: #374151;
+}
+
+.raw-data {
+  background: #111827;
+  color: #e5e7eb;
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin-top: 0.5rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+@media (max-width: 900px) {
+  .gauge-layout {
+    grid-template-columns: 1fr;
+  }
+  
+  .gauge-chart {
+    max-width: 320px;
+    margin: 0 auto;
+  }
+}

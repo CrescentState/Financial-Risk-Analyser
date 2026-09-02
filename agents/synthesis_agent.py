@@ -1,11 +1,10 @@
 import json
 import asyncio
-from typing import Literal
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from core.state import State, SynthesisBrief
+from core.state import SynthesisBrief
 from core.config import settings
 
 _genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)

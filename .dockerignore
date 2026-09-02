@@ -26,6 +26,11 @@ venv/
 env/
 ENV/
 
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
 # IDE
 .vscode/
 .idea/
@@ -58,6 +63,7 @@ Thumbs.db
 # Documentation
 *.md
 docs/
+README.md
 
 # Docker
 Dockerfile
@@ -76,3 +82,32 @@ run.py
 run.sh
 .env
 .env.local
+
+# Package
+package.json
+package-lock.json
+
+# TypeScript
+tsconfig*.json
+
+# Vite
+vite.config.ts
+
+# ESLint/Prettier
+.eslintrc*
+.prettierrc*
+
+# Streamlit (old)
+frontend/app.py
+frontend/components.py
+frontend/utils.py
+
+# Test files
+tests/
+*.test.ts
+*.test.tsx
+
+# Misc
+*.bak
+*.tmp
+*.temp

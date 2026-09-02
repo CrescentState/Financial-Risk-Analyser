@@ -3,7 +3,8 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from api.routes import router
 from core.config import settings
 
@@ -66,7 +67,7 @@ def create_app() -> FastAPI:
 
     app.include_router(router)
 
-    # Health check endpoints
+    # Health check endpoints (MUST be before catch-all)
     @app.get("/health", tags=["Health"])
     async def health_check():
         return {
@@ -83,8 +84,35 @@ def create_app() -> FastAPI:
     async def readiness():
         return {"status": "ready"}
 
+    # Serve React static files (built from frontend/)
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.exists(static_dir):
+        # Mount /assets for Vite's default output
+        app.mount("/assets", StaticFiles(directory=os.path.join(static_dir, "assets")), name="assets")
+        # Mount /static for any other static files
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        
+        # SPA catch-all: serve index.html for non-API routes
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(full_path: str):
+            # Don't interfere with API routes, health endpoints, or static assets
+            if full_path.startswith("api/") or full_path.startswith("health") or full_path.startswith("assets/") or full_path.startswith("static/"):
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
+            
+            index_path = os.path.join(static_dir, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path)
+            return JSONResponse(
+                status_code=404, 
+                content={"detail": "Frontend not built. Run 'npm run build' in frontend/"}
+            )
+
     @app.get("/", tags=["Root"])
     async def root():
+        # Serve frontend if available, otherwise return API info
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
         return {
             "service": "Financial Risk Analyser",
             "version": "0.1.0",

@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.*.local
+*.key
+*.pem
 
 # Python
 __pycache__/
@@ -48,6 +50,7 @@ htmlcov/
 cache/
 *.cache
 *.log
+*.json
 
 # OS
 .DS_Store
@@ -56,3 +59,46 @@ Thumbs.db
 # Distribution / packaging
 *.tar.gz
 *.whl
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+.dockerignore
+
+# Local development scripts
+run.py
+run.sh
+
+# TypeScript
+tsconfig*.json
+*.tsbuildinfo
+
+# Vite
+vite.config.ts
+*.tsbuildinfo
+
+# ESLint/Prettier
+.eslintrc*
+.prettierrc*
+
+# Streamlit (old frontend)
+frontend/app.py
+frontend/components.py
+frontend/utils.py
+
+# Test files
+tests/
+*.test.ts
+*.test.tsx
+
+# Coverage
+coverage/
+
+# Misc
+*.bak
+*.tmp
+*.temp
+*.orig
