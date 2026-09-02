@@ -87,11 +87,6 @@ package.json
 package-lock.json
 !frontend/package*.json
 
-# TypeScript
-tsconfig*.json
-
-# Vite
-vite.config.ts
 
 # ESLint/Prettier
 .eslintrc*
