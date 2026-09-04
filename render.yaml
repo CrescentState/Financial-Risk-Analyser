@@ -18,7 +18,7 @@ services:
       - key: ALPHA_VANTAGE_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.5-flash-lite
       - key: USE_MOCK_DATA
         value: "false"
       - key: ENABLE_DOCS

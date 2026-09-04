@@ -205,7 +205,7 @@ GEMINI_API_KEY=your_gemini_key_here
 ALPHA_VANTAGE_KEY=your_alpha_vantage_key_here
 
 # Optional
-GEMINI_MODEL=gemini-2.5-flash          # or gemini-flash-latest
+GEMINI_MODEL=gemini-3.5-flash-lite          # or gemini-flash-latest
 USE_MOCK_DATA=true                      # enables mock mode (no API calls)
 ```
 
@@ -356,7 +356,8 @@ Base: 1.0
 │   ├── No company_name/ticker                → -0.1
 │   ├── No articles in 30 days                → -0.1
 │   ├── RSS network failure                   → -0.1
-│   ├── LLM validation failed (after retry)   → -0.1
+│   ├── LLM validation failed (after retry)   → -0.1High leverage with a debt-to-equity ratio exceeding 2.5 at 3.23
+Fading share buyback effect
 │   └── Hostile sentiment (< -0.4)            → -0.1
 └── Synthesis Agent
     ├── Financial incomplete                  → -0.2
