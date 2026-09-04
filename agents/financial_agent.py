@@ -1,18 +1,34 @@
 import asyncio
-import os
 import sys
-import yfinance as yf
-
 from typing import Optional
+
 from core.state import SystemState, FinancialData
 from core.cache import get_cached_response, set_cached_response
 from core.config import settings
-from core.clients import async_http_client
+from core.clients import (
+    async_http_client,
+    finnhub_company_profile,
+    finnhub_company_metrics,
+    finnhub_quote,
+)
+from core.rate_limiter import alpha_vantage_limiter
 
 
 def _is_test_mode() -> bool:
     """Check if test mode is enabled (checks at call time for test overrides)."""
     return getattr(sys.modules.get(__name__, {}), '_TEST_MODE_OVERRIDE', False)
+
+
+def _is_finnhub_mode() -> bool:
+    """Check if Finnhub-only mode is enabled via environment variable."""
+    import os
+    return os.getenv("USE_FINNHUB_ONLY", "false").lower() == "true"
+
+
+def _is_mock_mode() -> bool:
+    """Check if mock mode is enabled via environment variable."""
+    import os
+    return os.getenv("USE_MOCK_DATA", "false").lower() == "true"
 
 
 def clean_float(val) -> Optional[float]:
@@ -144,13 +160,15 @@ MOCK_DATA = {
 
 async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[dict, bool]:
     """Fetch data from Alpha Vantage asynchronously with validation and error reporting.
-    
+
     Implements three-stage caching strategy:
     1. Retrieval (Get): Check local cache first - return cached data if valid and fresh
     2. Storage (Store): On successful API response, persist to cache with timestamp
     3. Expiration (Refresh): TTL-based eviction - stale data triggers fresh API call
-    
+
     In test mode, returns mock data immediately without checking cache.
+
+    Implements token bucket rate limiting (5 req/min) and exponential backoff retry (max 3 attempts).
     """
     ticker_clean = ticker.strip().upper()
 
@@ -166,7 +184,7 @@ async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[d
     if cached_data and isinstance(cached_data, dict) and len(cached_data) > 0:
         return cached_data, False  # Cache hit - no network call made
 
-    # STAGE 2: LIVE FETCH (on cache miss or stale data)
+    # STAGE 2: LIVE FETCH (on cache miss or stale data) with rate limiting and retries
     api_key = settings.ALPHA_VANTAGE_API_KEY
     if not api_key:
         return {"error": "ALPHA_VANTAGE_KEY is unconfigured or empty."}, False
@@ -174,25 +192,37 @@ async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[d
     url = "https://www.alphavantage.co/query"
     params = {"function": function_name, "symbol": ticker_clean, "apikey": api_key}
 
-    try:
-        # Use shared HTTP client with connection pooling and 5s timeout
-        response = await async_http_client.get(url, params=params, timeout=5.0)
-        response.raise_for_status()
-        data = response.json()
+    # Apply rate limiting before making request
+    await alpha_vantage_limiter.acquire()
 
-        # Check for API-level errors (rate limits, invalid ticker, etc.)
-        if any(k in data for k in ("Note", "Information", "Error Message")):
-            return data, True  # Return error payload, don't cache
+    for attempt in range(settings.AV_MAX_RETRIES):
+        try:
+            # Use shared HTTP client with connection pooling and 5s timeout
+            response = await async_http_client.get(url, params=params, timeout=5.0)
+            response.raise_for_status()
+            data = response.json()
 
-        # STAGE 3: STORAGE (STORE)
-        # Only cache successful, valid responses
-        if data and isinstance(data, dict) and len(data) > 0:
-            set_cached_response(ticker_clean, function_name, data)
+            # Check for API-level errors (rate limits, invalid ticker, etc.)
+            if any(k in data for k in ("Note", "Information", "Error Message")):
+                # Return error payload for fallback handling
+                return data, True
 
-        return data, True
+            # STAGE 3: STORAGE (STORE)
+            # Only cache successful, valid responses
+            if data and isinstance(data, dict) and len(data) > 0:
+                set_cached_response(ticker_clean, function_name, data)
 
-    except Exception as exc:
-        return {"error": f"HTTP/Network error for {function_name}: {str(exc)}"}, False
+            return data, True
+
+        except Exception as exc:
+            if attempt < settings.AV_MAX_RETRIES - 1:
+                # Exponential backoff: 12s, 24s, 48s...
+                delay = settings.AV_RETRY_BASE_DELAY * (2 ** attempt)
+                await asyncio.sleep(delay)
+                continue
+            return {"error": f"HTTP/Network error for {function_name}: {str(exc)}"}, False
+
+    return {"error": "Max retries exceeded"}, False
 
 
 def _fetch_alpha_vantage(function_name: str, ticker: str) -> tuple[dict, bool]:
@@ -200,24 +230,117 @@ def _fetch_alpha_vantage(function_name: str, ticker: str) -> tuple[dict, bool]:
     return asyncio.run(_fetch_alpha_vantage_async(function_name, ticker))
 
 
-async def _fetch_yfinance(ticker: str) -> dict:
-    """yfinance fallback with 3s timeout."""
+async def _fetch_finnhub(ticker: str) -> dict:
+    """Finnhub fallback - fetches company profile, metrics, and quote using official SDK."""
+    # MOCK MODE: Return mock data converted to Finnhub format
+    if _is_mock_mode() or _is_test_mode():
+        from agents.mock_data import get_mock_yfinance_data
+        ticker_clean = ticker.strip().upper()
+        return get_mock_yfinance_data(ticker_clean)
+
     try:
-        def _sync_yfinance():
-            tk = yf.Ticker(ticker, session=None)
-            return tk.info
-        loop = asyncio.get_event_loop()
-        info = await asyncio.wait_for(loop.run_in_executor(None, _sync_yfinance), timeout=3.0)
-        return info or {}
-    except Exception:
+        # Fetch all data concurrently for speed
+        import asyncio
+        
+        profile_task = asyncio.create_task(finnhub_company_profile(ticker))
+        metrics_task = asyncio.create_task(finnhub_company_metrics(ticker))
+        quote_task = asyncio.create_task(finnhub_quote(ticker))
+        
+        profile, metrics, quote = await asyncio.gather(
+            profile_task, metrics_task, quote_task,
+            return_exceptions=True
+        )
+        
+        # Handle any exceptions
+        if isinstance(profile, Exception):
+            profile = {}
+        if isinstance(metrics, Exception):
+            metrics = {}
+        if isinstance(quote, Exception):
+            quote = {}
+        
+        m = metrics.get("metric", {}) if isinstance(metrics, dict) else {}
+        profile = profile if isinstance(profile, dict) else {}
+        quote = quote if isinstance(quote, dict) else {}
+        
+        # Extract debt-to-equity with multiple possible Finnhub metric keys
+        debt_to_equity_keys = [
+            "totalDebt/totalEquityAnnual",
+            "totalDebt/totalEquityQuarterly", 
+            "debtToEquityAnnual",
+            "debtToEquityQuarterly",
+            "debtToEquity",
+            "debtToEquityTTM",
+            "debtEquityRatioAnnual",
+            "debtEquityRatio"
+        ]
+        raw_debt_equity = None
+        for key in debt_to_equity_keys:
+            val = m.get(key)
+            if val is not None:
+                raw_debt_equity = val
+                break
+        
+        # Calculate revenue YoY growth directly from Finnhub basic metrics payload
+        raw_rev_growth = m.get("revenueGrowthTTMYoy") or m.get("revenueGrowth5Y")
+        rev_growth = (raw_rev_growth / 100.0) if raw_rev_growth is not None else None
+        
+        # Raw market capitalization extraction (Finnhub reports profile marketCap in Millions)
+        raw_mkt_cap = profile.get("marketCapitalization")
+        market_cap = raw_mkt_cap * 1_000_000 if raw_mkt_cap else None
+        
+        # Compute revenue and net income from per-share metrics (Finnhub free tier)
+        # sharesOutstanding = marketCap / currentPrice (from quote)
+        shares_outstanding = None
+        if market_cap and quote and quote.get("c"):
+            shares_outstanding = market_cap / quote.get("c")
+        
+        revenue_ttm = None
+        net_income_ttm = None
+        cash_position = None
+        if shares_outstanding:
+            rev_per_share = m.get("revenuePerShareTTM")
+            if rev_per_share:
+                revenue_ttm = rev_per_share * shares_outstanding
+            eps_ttm = m.get("epsTTM") or m.get("epsBasicExclExtraTTM")
+            if eps_ttm:
+                net_income_ttm = eps_ttm * shares_outstanding
+
+            # Compute cash position from cash per share (Finnhub free tier)
+            cash_per_share = m.get("cashPerSharePerShareAnnual") or m.get("cashPerSharePerShareQuarterly")
+            if cash_per_share:
+                cash_position = cash_per_share * shares_outstanding
+        
+        info = {
+            "marketCap": market_cap,
+            "trailingPE": clean_float(m.get("peBasicExclExtraTTM") or m.get("peNormalizedAnnual")),
+            "totalRevenue": clean_float(revenue_ttm),
+            "netIncomeToCommon": clean_float(net_income_ttm),
+            "currentRatio": clean_float(m.get("currentRatioQuarterly") or m.get("currentRatioAnnual")),
+            "debtToEquity": normalize_debt_to_equity(clean_float(raw_debt_equity)),
+            "totalCash": clean_float(cash_position) if cash_position else None,
+            "longName": profile.get("name") or ticker,
+            "shortName": profile.get("ticker"),
+            "revenueGrowth": rev_growth,
+        }
+        
+        return {"info": info}
+    except Exception as err:
+        print(f"[FinancialAgent] Finnhub execution error for {ticker}: {err}")
         return {}
 
 
 async def financial_agent_async(state: dict) -> dict:
-    """Async Financial Risk Agent node with full Alpha Vantage integration + yfinance fallback."""
+    """Async Financial Risk Agent node with full Alpha Vantage integration + Finnhub fallback.
+    
+    Supports USE_FINNHUB_ONLY mode to skip Alpha Vantage entirely and use Finnhub only.
+    """
     ticker = state.get("ticker", "").strip().upper()
     new_errors = []
     confidence = 1.0
+
+    # Check if Finnhub-only mode is enabled
+    use_finnhub_only = _is_finnhub_mode()
 
     fd = {
         "data_available": False,
@@ -233,102 +356,122 @@ async def financial_agent_async(state: dict) -> dict:
         "cash_position": None,  # backward compat for tests
     }
 
-    # 1. Try Alpha Vantage OVERVIEW
-    overview_data, overview_was_live = await _fetch_alpha_vantage_async("OVERVIEW", ticker)
+    # If Finnhub-only mode, skip Alpha Vantage entirely
+    if _is_finnhub_mode():
+        finnhub_res = await _fetch_finnhub(ticker)
+        info = finnhub_res.get("info", {})
+        if info:
+            fd["market_cap"] = info.get("marketCap")
+            fd["pe_ratio"] = info.get("trailingPE")
+            fd["revenue"] = info.get("totalRevenue")
+            fd["net_income"] = info.get("netIncomeToCommon")
+            fd["current_ratio"] = info.get("currentRatio")
+            fd["debt_to_equity"] = info.get("debtToEquity")
+            fd["yoy_revenue_growth"] = info.get("revenueGrowth")
+            fd["revenue_growth"] = info.get("revenueGrowth")
+            fd["cash_position"] = info.get("totalCash")
+            company_name = info.get("longName") or ticker
+        else:
+            new_errors.append("Finnhub data unavailable")
+            overview_failed = True
+    else:
+        # 1. Try Alpha Vantage OVERVIEW
+        overview_data, overview_was_live = await _fetch_alpha_vantage_async("OVERVIEW", ticker)
 
-    # Check for rate limit / throttle - trigger yfinance fallback
-    overview_failed = False
-    if "error" in overview_data:
-        new_errors.append(overview_data["error"])
-        overview_failed = True
-    elif "Note" in overview_data or "Information" in overview_data:
-        new_errors.append("Alpha Vantage Throttle")
-        confidence -= 0.2
-        overview_failed = True
-    elif not overview_data or "Error Message" in overview_data:
-        new_errors.append(f"Invalid US Equity Ticker or empty profile for {ticker}.")
-        overview_failed = True
+        # Check for rate limit / throttle - trigger Finnhub fallback
+        overview_failed = False
+        if "error" in overview_data:
+            new_errors.append(overview_data["error"])
+            overview_failed = True
+        elif "Note" in overview_data or "Information" in overview_data:
+            new_errors.append("Alpha Vantage Throttle")
+            confidence -= 0.2
+            overview_failed = True
+        elif not overview_data or "Error Message" in overview_data:
+            new_errors.append(f"Invalid US Equity Ticker or empty profile for {ticker}.")
+            overview_failed = True
 
-    # Extract with clean_float and normalization (if overview succeeded)
-    company_name = ticker
-    if not overview_failed:
-        raw_revenue = overview_data.get("RevenueTTM") or overview_data.get("totalRevenue")
-        raw_market_cap = overview_data.get("MarketCapitalization") or overview_data.get("marketCap")
-        raw_pe = overview_data.get("PERatio") or overview_data.get("trailingPE")
-        raw_de = overview_data.get("DebtToEquity") or overview_data.get("debtToEquity")
+        # Extract with clean_float and normalization (if overview succeeded)
+        company_name = ticker
+        if not overview_failed:
+            raw_revenue = overview_data.get("RevenueTTM") or overview_data.get("totalRevenue")
+            raw_market_cap = overview_data.get("MarketCapitalization") or overview_data.get("marketCap")
+            raw_pe = overview_data.get("PERatio") or overview_data.get("trailingPE")
+            raw_de = overview_data.get("DebtToEquity") or overview_data.get("debtToEquity")
 
-        fd["market_cap"] = clean_float(raw_market_cap)
-        fd["pe_ratio"] = clean_float(raw_pe)
-        fd["debt_to_equity"] = normalize_debt_to_equity(clean_float(raw_de))
+            fd["market_cap"] = clean_float(raw_market_cap)
+            fd["pe_ratio"] = clean_float(raw_pe)
+            raw_de = overview_data.get("DebtToEquity") or overview_data.get("debtToEquity")
+            fd["debt_to_equity"] = normalize_debt_to_equity(clean_float(raw_de))
 
-        # Revenue from overview (TTM)
-        fd["revenue"] = clean_float(raw_revenue)
+            # Revenue from overview (TTM)
+            fd["revenue"] = clean_float(raw_revenue)
 
-        # Company name
-        company_name = overview_data.get("Name") or overview_data.get("longName") or ticker
+            # Company name
+            company_name = overview_data.get("Name") or overview_data.get("longName") or ticker
 
-    # yfinance fallback if overview failed (only in production mode)
-    if overview_failed and not _is_test_mode():
-        yf_data = await _fetch_yfinance(ticker)
-        if yf_data:
-            fd["market_cap"] = clean_float(yf_data.get("marketCap"))
-            fd["pe_ratio"] = clean_float(yf_data.get("trailingPE"))
-            fd["debt_to_equity"] = normalize_debt_to_equity(clean_float(yf_data.get("debtToEquity")))
-            fd["revenue"] = clean_float(yf_data.get("totalRevenue"))
-            fd["current_ratio"] = clean_float(yf_data.get("currentRatio"))
-            fd["cash_position"] = clean_float(yf_data.get("totalCash"))
-            company_name = yf_data.get("longName") or yf_data.get("shortName") or ticker
+            # Fetch secondary financial statements
+            if not _is_test_mode() and not _is_mock_mode():
+                await asyncio.sleep(1.2)
 
-    # INCOME STATEMENT for yoy_revenue_growth (only if not using yfinance fallback)
-    if not overview_failed:
-        # Small delay to respect Alpha Vantage rate limit (5 req/min free tier)
-        if not _is_test_mode():
-            await asyncio.sleep(1.5)
-        income_data, income_was_live = await _fetch_alpha_vantage_async("INCOME_STATEMENT", ticker)
-        if "Note" not in income_data and "Information" not in income_data and "error" not in income_data:
-            annual_reports = income_data.get("annualReports", [])
-            if annual_reports:
-                raw_ni = annual_reports[0].get("netIncome")
-                if raw_ni and raw_ni != "None":
-                    try:
-                        fd["net_income"] = clean_float(raw_ni)
-                    except ValueError:
-                        pass
+            income_data, _ = await _fetch_alpha_vantage_async("INCOME_STATEMENT", ticker)
+            if "Note" not in income_data and "error" not in income_data:
+                annual_reports = income_data.get("annualReports", [])
+                if annual_reports:
+                    raw_ni = annual_reports[0].get("netIncome")
+                    if raw_ni and raw_ni != "None":
+                        try:
+                            fd["net_income"] = clean_float(raw_ni)
+                        except ValueError:
+                            pass
 
-                if len(annual_reports) >= 2:
-                    rev_curr = clean_float(annual_reports[0].get("totalRevenue"))
-                    rev_prev = clean_float(annual_reports[1].get("totalRevenue"))
-                    if rev_curr and rev_prev and rev_prev > 0:
-                        fd["yoy_revenue_growth"] = (rev_curr - rev_prev) / rev_prev
-                        fd["revenue_growth"] = fd["yoy_revenue_growth"]  # backward compat
+                        if len(annual_reports) >= 2:
+                            rev_curr = clean_float(annual_reports[0].get("totalRevenue"))
+                            rev_prev = clean_float(annual_reports[1].get("totalRevenue"))
+                            if rev_curr and rev_prev and rev_prev > 0:
+                                fd["yoy_revenue_growth"] = (rev_curr - rev_prev) / rev_prev
+                                fd["revenue_growth"] = fd["yoy_revenue_growth"]  # backward compat
 
-    # BALANCE SHEET for current_ratio, cash_position, and debt_to_equity (only if not using yfinance fallback)
-    if not overview_failed:
-        # Small delay to respect Alpha Vantage rate limit (5 req/min free tier)
-        if not _is_test_mode():
-            await asyncio.sleep(1.5)
-        balance_data, balance_was_live = await _fetch_alpha_vantage_async("BALANCE_SHEET", ticker)
-        if "Note" not in balance_data and "Information" not in balance_data and "error" not in balance_data:
-            annual_bal = balance_data.get("annualReports", [])
-            if annual_bal:
-                latest = annual_bal[0]
-                ca = clean_float(latest.get("totalCurrentAssets"))
-                cl = clean_float(latest.get("totalCurrentLiabilities"))
-                if ca and cl and cl > 0:
-                    fd["current_ratio"] = ca / cl
-                raw_cash = latest.get("cashAndCashEquivalentsAtCarryingValue") or latest.get("cash")
-                fd["cash_position"] = clean_float(raw_cash)
+            if not _is_test_mode() and not _is_mock_mode():
+                await asyncio.sleep(1.5)
 
-                # Calculate debt_to_equity from balance sheet: (shortTermDebt + longTermDebt) / totalShareholderEquity
-                short_debt = clean_float(latest.get("shortTermDebt"))
-                long_debt = clean_float(latest.get("longTermDebt")) or clean_float(latest.get("longTermDebtNoncurrent"))
-                equity = clean_float(latest.get("totalShareholderEquity"))
-                if short_debt is not None and long_debt is not None and equity and equity > 0:
-                    total_debt = short_debt + long_debt
-                    fd["debt_to_equity"] = total_debt / equity
-                elif short_debt is not None and equity and equity > 0:
-                    # Fallback if only short term debt available
-                    fd["debt_to_equity"] = short_debt / equity
+            balance_data, _ = await _fetch_alpha_vantage_async("BALANCE_SHEET", ticker)
+            if "Note" not in balance_data and "error" not in balance_data:
+                annual_bal = balance_data.get("annualReports", [])
+                if annual_bal:
+                    latest = annual_bal[0]
+                    ca = clean_float(latest.get("totalCurrentAssets"))
+                    cl = clean_float(latest.get("totalCurrentLiabilities"))
+                    if ca and cl and cl > 0:
+                        fd["current_ratio"] = ca / cl
+                    fd["cash_position"] = clean_float(latest.get("cashAndCashEquivalentsAtCarryingValue") or latest.get("cash"))
+
+                    # Calculate debt_to_equity from balance sheet: (shortTermDebt + longTermDebt) / totalShareholderEquity
+                    short_debt = clean_float(latest.get("shortTermDebt"))
+                    long_debt = clean_float(latest.get("longTermDebt")) or clean_float(latest.get("longTermDebtNoncurrent"))
+                    equity = clean_float(latest.get("totalShareholderEquity"))
+                    if short_debt is not None and long_debt is not None and equity and equity > 0:
+                        total_debt = short_debt + long_debt
+                        fd["debt_to_equity"] = total_debt / equity
+                    elif short_debt is not None and equity and equity > 0:
+                        # Fallback if only short term debt available
+                        fd["debt_to_equity"] = short_debt / equity
+
+        # Finnhub fallback if overview failed (only in production mode)
+        if overview_failed and not _is_test_mode():
+            finnhub_res = await _fetch_finnhub(ticker)
+            info = finnhub_res.get("info", {})
+            if info:
+                fd["market_cap"] = info.get("marketCap")
+                fd["pe_ratio"] = info.get("trailingPE")
+                fd["revenue"] = info.get("totalRevenue")
+                fd["net_income"] = info.get("netIncomeToCommon")
+                fd["current_ratio"] = info.get("currentRatio")
+                fd["debt_to_equity"] = info.get("debtToEquity")
+                fd["yoy_revenue_growth"] = info.get("revenueGrowth")
+                fd["revenue_growth"] = info.get("revenueGrowth")
+                fd["cash_position"] = info.get("totalCash")
+                company_name = info.get("longName") or ticker
 
     # COMPLETENESS ASSESSMENT - include current_ratio per contract
     required = [fd.get("revenue"), fd.get("market_cap"), fd.get("debt_to_equity"), fd.get("yoy_revenue_growth"), fd.get("current_ratio")]

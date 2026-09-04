@@ -58,11 +58,16 @@ def init_state(ticker: str) -> SystemState:
         "company_name": "",
         "financial_data": {
             "data_available": False,
+            "data_complete": False,
             "debt_to_equity": None,
             "pe_ratio": None,
             "yoy_revenue_growth": None,
+            "revenue_growth": None,
             "current_ratio": None,
             "market_cap": None,
+            "revenue": None,
+            "net_income": None,
+            "cash_position": None,
         },
         "news_data": {
             "news_available": False,

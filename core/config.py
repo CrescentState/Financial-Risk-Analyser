@@ -6,13 +6,19 @@ class Settings(BaseSettings):
     # Set default values or allow Optional for testing/mocking environments
     ALPHA_VANTAGE_API_KEY: str = Field(default="", validation_alias="ALPHA_VANTAGE_KEY")
     GEMINI_API_KEY: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    FINNHUB_API_KEY: str = Field(default="", validation_alias="FINNHUB_API_KEY")
     GEMINI_MODEL: str = Field(default="gemini-3.5-flash-lite", validation_alias="GEMINI_MODEL")
     
     # Configurations
     AV_RATE_LIMIT_DELAY: int = 15
+    AV_MAX_RETRIES: int = 3
+    AV_RETRY_BASE_DELAY: int = 12
     NEWS_LOOKBACK_DAYS: int = 30
     MAX_NEWS_ARTICLES: int = 10
     HOSTILE_NEWS_THRESHOLD: float = -0.4
+    
+    # Mode toggles
+    USE_FINNHUB_ONLY: bool = Field(default=False, validation_alias="USE_FINNHUB_ONLY")
 
     # Pydantic v2 modern settings configuration
     model_config = SettingsConfigDict(

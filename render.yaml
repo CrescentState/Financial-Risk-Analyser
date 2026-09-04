@@ -23,5 +23,13 @@ services:
         value: "false"
       - key: ENABLE_DOCS
         value: "false"
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: "https://your-frontend.onrender.com,http://localhost:8501"
+      - key: AV_MAX_RETRIES
+        value: "3"
+      - key: AV_RETRY_BASE_DELAY
+        value: "12"
     healthCheckPath: /health
     autoDeploy: true

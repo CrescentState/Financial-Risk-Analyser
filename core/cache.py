@@ -56,12 +56,13 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
             if not os.path.exists(file_path):
                 return None
 
-            # TTL Expiration Check
+            # TTL Expiration Check - done while holding lock to prevent TOCTOU
             file_age = time.time() - os.path.getmtime(file_path)
             if file_age > TTL_SECONDS:
                 _file_unlock(f)
+                # Use os.unlink which is atomic, and ignore errors if file was already removed
                 try:
-                    os.remove(file_path)
+                    os.unlink(file_path)
                 except OSError:
                     pass
                 return None
@@ -77,7 +78,7 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
             ):
                 _file_unlock(f)
                 try:
-                    os.remove(file_path)
+                    os.unlink(file_path)
                 except OSError:
                     pass
                 return None
@@ -89,7 +90,7 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
         # File corrupted or deleted mid-read - clean up and return miss
         if os.path.exists(file_path):
             try:
-                os.remove(file_path)
+                os.unlink(file_path)
             except OSError:
                 pass
         return None
