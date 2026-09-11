@@ -51,7 +51,7 @@ def test_boundary_confidence_thresholds(base_state):
   """Confidence < 0.5 triggers 'Flag for Review'; 0.5 does not."""
   base_state["risk_data"]["risk_score"] = 10.0
 
-  with patch("agents.synthesis_agent.genai.Client"):
+  with patch("agents.synthesis_agent.get_gemini_client"):
     # Exactly 0.49 -> Flag for Review
     base_state["confidence_score"] = 0.49
     res_low = run_synthesis_agent(base_state)
@@ -71,7 +71,7 @@ def test_boundary_confidence_thresholds(base_state):
 
 def test_boundary_risk_score_thresholds(base_state):
   """Tests exact boundaries at 20.0, 45.0, and 70.0."""
-  with patch("agents.synthesis_agent.genai.Client"):
+  with patch("agents.synthesis_agent.get_gemini_client"):
     # Exactly 20.0 with growth 0.08 -> Strong Buy Signal
     base_state["risk_data"]["risk_score"] = 20.0
     assert (
@@ -131,7 +131,7 @@ def test_boundary_growth_thresholds(base_state):
   """Growth > 0.05 required for Strong Buy Signal when risk <= 20.0."""
   base_state["risk_data"]["risk_score"] = 15.0
 
-  with patch("agents.synthesis_agent.genai.Client"):
+  with patch("agents.synthesis_agent.get_gemini_client"):
     # Exactly 0.05 -> Falls back to Cautious Positive
     base_state["financial_data"]["yoy_revenue_growth"] = 0.05
     assert (
@@ -160,7 +160,7 @@ def test_growth_none_or_negative_prevents_strong_buy(base_state):
   """yoy_revenue_growth = None or negative growth prevents Strong Buy Signal."""
   base_state["risk_data"]["risk_score"] = 15.0
 
-  with patch("agents.synthesis_agent.genai.Client"):
+  with patch("agents.synthesis_agent.get_gemini_client"):
     # None growth -> Cautious Positive
     base_state["financial_data"]["yoy_revenue_growth"] = None
     assert (
@@ -185,19 +185,22 @@ def test_growth_none_or_negative_prevents_strong_buy(base_state):
 # --------------------------------------------------------------------------
 
 
-def test_state_preservation_and_error_accumulation(base_state):
-  """Verifies previous errors are preserved and confidence passes through."""
+def test_state_preservation_and_new_errors_only(base_state):
+  """Verifies input state is not mutated, confidence passes through, and only
+  new errors are returned (the LangGraph reducer accumulates across nodes)."""
   base_state["errors"] = ["Financial Agent: yfinance fallback used"]
 
-  with patch("agents.synthesis_agent._genai_client") as mock_client:
-    mock_client.models.generate_content.side_effect = Exception("LLM Error")
+  with patch("agents.synthesis_agent.get_gemini_client") as mock_client:
+    mock_client.return_value.models.generate_content.side_effect = Exception("LLM Error")
 
     res = run_synthesis_agent(base_state)
 
-  # Check original error retained, new error appended
-  assert "Financial Agent: yfinance fallback used" in res["errors"]
+  # Only the new error is returned; prior errors accumulate via the graph reducer
+  assert "Financial Agent: yfinance fallback used" not in res["errors"]
   assert any("Synthesis Agent execution failed" in err for err in res["errors"])
   assert res["confidence_score"] == 1.0
+  # Input state must not be mutated
+  assert base_state["errors"] == ["Financial Agent: yfinance fallback used"]
 
 
 def test_malformed_json_llm_response_fallback(base_state):
@@ -205,8 +208,8 @@ def test_malformed_json_llm_response_fallback(base_state):
   mock_genai_response = MagicMock()
   mock_genai_response.text = "NOT_VALID_JSON_STRING"
 
-  with patch("agents.synthesis_agent._genai_client") as mock_client:
-    mock_client.models.generate_content.return_value = mock_genai_response
+  with patch("agents.synthesis_agent.get_gemini_client") as mock_client:
+    mock_client.return_value.models.generate_content.return_value = mock_genai_response
 
     res = run_synthesis_agent(base_state)
 

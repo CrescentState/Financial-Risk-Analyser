@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 import time
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import fcntl
@@ -45,17 +48,12 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
     """
     file_path = _get_cache_path(ticker, endpoint)
 
-    if not os.path.exists(file_path):
-        return None
-
     try:
+        # Open directly; a concurrent TTL eviction may have unlinked the file,
+        # which raises FileNotFoundError and is treated as a cache miss below.
         with open(file_path, "r", encoding="utf-8") as f:
             _file_lock(f, exclusive=False)  # Shared lock for reading
             
-            # Re-check existence after acquiring lock (TOCTOU protection)
-            if not os.path.exists(file_path):
-                return None
-
             # TTL Expiration Check - done while holding lock to prevent TOCTOU
             file_age = time.time() - os.path.getmtime(file_path)
             if file_age > TTL_SECONDS:
@@ -65,6 +63,7 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
                     os.unlink(file_path)
                 except OSError:
                     pass
+                logger.debug(f"Cache EXPIRED {ticker}/{endpoint} (age {file_age:.0f}s)")
                 return None
 
             data = json.load(f)
@@ -81,13 +80,16 @@ def get_cached_response(ticker: str, endpoint: str) -> Optional[Dict[str, Any]]:
                     os.unlink(file_path)
                 except OSError:
                     pass
+                logger.debug(f"Cache REJECTED {ticker}/{endpoint} (error payload)")
                 return None
 
             _file_unlock(f)
+            logger.debug(f"Cache HIT {ticker}/{endpoint} (age {file_age:.0f}s)")
             return data
 
-    except (json.JSONDecodeError, IOError, OSError):
+    except (json.JSONDecodeError, IOError, OSError) as e:
         # File corrupted or deleted mid-read - clean up and return miss
+        logger.debug(f"Cache MISS {ticker}/{endpoint} ({type(e).__name__})")
         if os.path.exists(file_path):
             try:
                 os.unlink(file_path)
@@ -107,6 +109,7 @@ def set_cached_response(ticker: str, endpoint: str, data: Dict[str, Any]) -> Non
         or "Information" in data
         or "Error Message" in data
     ):
+        logger.debug(f"Cache SKIP-WRITE {ticker}/{endpoint} (error/empty payload)")
         return
 
     file_path = _get_cache_path(ticker, endpoint)
@@ -119,10 +122,12 @@ def set_cached_response(ticker: str, endpoint: str, data: Dict[str, Any]) -> Non
             f.flush()
             os.fsync(f.fileno())
             _file_unlock(f)
-        
+
         # Atomic replace (POSIX guarantees atomicity for rename within same filesystem)
         os.replace(temp_path, file_path)
-    except IOError:
+        logger.debug(f"Cache WRITE {ticker}/{endpoint}")
+    except IOError as e:
+        logger.debug(f"Cache WRITE-FAILED {ticker}/{endpoint} ({e})")
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)

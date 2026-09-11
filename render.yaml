@@ -8,8 +8,10 @@ services:
     plan: starter
     buildCommand: |
       pip install -r requirements.txt
-      cd frontend && npm install && npm run build
-    startCommand: gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
+      cd frontend && npm install && npm run build && cd ..
+      # main.py serves the UI from static/ - sync the fresh bundle into it
+      rm -rf static/* && cp -r frontend/dist/* static/
+    startCommand: gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 180
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -26,10 +28,13 @@ services:
       - key: FINNHUB_API_KEY
         sync: false
       - key: CORS_ORIGINS
-        value: "https://your-frontend.onrender.com,http://localhost:8501"
+        value: "https://financial-risk-analyser.onrender.com,http://localhost:3000,http://localhost:8000"
       - key: AV_MAX_RETRIES
         value: "3"
       - key: AV_RETRY_BASE_DELAY
         value: "12"
+      # Uncomment to skip Alpha Vantage entirely and use Finnhub only
+      # - key: USE_FINNHUB_ONLY
+      #   value: "true"
     healthCheckPath: /health
     autoDeploy: true

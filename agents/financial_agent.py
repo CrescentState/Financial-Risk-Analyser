@@ -6,7 +6,7 @@ from core.state import SystemState, FinancialData
 from core.cache import get_cached_response, set_cached_response
 from core.config import settings
 from core.clients import (
-    async_http_client,
+    get_async_http_client,
     finnhub_company_profile,
     finnhub_company_metrics,
     finnhub_quote,
@@ -55,109 +55,6 @@ def normalize_debt_to_equity(raw_val: Optional[float]) -> Optional[float]:
     return raw_val / 100.0 if raw_val > 10 else raw_val
 
 
-MOCK_DATA = {
-    "AAPL": {
-        "OVERVIEW": {
-            "Name": "Apple Inc.",
-            "RevenueTTM": "466822988000",
-            "MarketCapitalization": "4514709504000",
-            "PERatio": "35.48",
-            "DebtToEquity": "1.57",
-        },
-        "INCOME_STATEMENT": {
-            "annualReports": [
-                {"netIncome": "112010000000", "totalRevenue": "466822988000"},
-                {"netIncome": "99803000000", "totalRevenue": "394328000000"},
-            ]
-        },
-        "BALANCE_SHEET": {
-            "annualReports": [
-                {
-                    "cashAndCashEquivalentsAtCarryingValue": "35934000000",
-                    "cash": "35934000000",
-                    "shortTermDebt": "10000000000",
-                    "longTermDebt": "100000000000",
-                    "totalShareholderEquity": "70000000000",
-                    "totalCurrentAssets": "150000000000",
-                    "totalCurrentLiabilities": "120000000000",
-                }
-            ]
-        },
-    },
-    "TSLA": {
-        "OVERVIEW": {
-            "Name": "Tesla Inc",
-            "RevenueTTM": "103619002000",
-            "MarketCapitalization": "1433132728000",
-            "PERatio": "332.9",
-            "DebtToEquity": "0.15",
-        },
-        "INCOME_STATEMENT": {
-            "annualReports": [
-                {"netIncome": "3794000000", "totalRevenue": "103619002000"},
-                {"netIncome": "5519000000", "totalRevenue": "106606000000"},
-            ]
-        },
-        "BALANCE_SHEET": {
-            "annualReports": [
-                {
-                    "cashAndCashEquivalentsAtCarryingValue": "16513000000",
-                    "cash": "16513000000",
-                    "shortTermDebt": "1000000000",
-                    "longTermDebt": "2000000000",
-                    "totalShareholderEquity": "50000000000",
-                    "totalCurrentAssets": "80000000000",
-                    "totalCurrentLiabilities": "60000000000",
-                }
-            ]
-        },
-    },
-    "ZZZINVALID": {
-        "OVERVIEW": {"Information": "Invalid ticker"},
-        "INCOME_STATEMENT": {"Information": "Invalid ticker"},
-        "BALANCE_SHEET": {"Information": "Invalid ticker"},
-    },
-    "TWTR": {
-        "OVERVIEW": {"Information": "Delisted ticker"},
-        "INCOME_STATEMENT": {"Information": "Delisted ticker"},
-        "BALANCE_SHEET": {"Information": "Delisted ticker"},
-    },
-    "RELIANCE.NS": {
-        "OVERVIEW": {"Information": "Rate limit"},
-        "INCOME_STATEMENT": {"Information": "Rate limit"},
-        "BALANCE_SHEET": {"Information": "Rate limit"},
-    },
-    "MSFT": {
-        "OVERVIEW": {
-            "Name": "Microsoft Corporation",
-            "RevenueTTM": "200000000000",
-            "MarketCapitalization": "3000000000000",
-            "PERatio": "30.0",
-            "DebtToEquity": "0.5",
-        },
-        "INCOME_STATEMENT": {
-            "annualReports": [
-                {"netIncome": "70000000000", "totalRevenue": "200000000000"},
-                {"netIncome": "60000000000", "totalRevenue": "180000000000"},
-            ]
-        },
-        "BALANCE_SHEET": {
-            "annualReports": [
-                {
-                    "cashAndCashEquivalentsAtCarryingValue": "50000000000",
-                    "cash": "50000000000",
-                    "shortTermDebt": "5000000000",
-                    "longTermDebt": "50000000000",
-                    "totalShareholderEquity": "100000000000",
-                    "totalCurrentAssets": "180000000000",
-                    "totalCurrentLiabilities": "90000000000",
-                }
-            ]
-        },
-    },
-}
-
-
 async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[dict, bool]:
     """Fetch data from Alpha Vantage asynchronously with validation and error reporting.
 
@@ -174,9 +71,8 @@ async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[d
 
     # TEST MODE: Return mock data immediately, bypassing cache and network
     if _is_test_mode():
-        mock_ticker = MOCK_DATA.get(ticker_clean, MOCK_DATA["ZZZINVALID"])
-        mock_response = mock_ticker.get(function_name, {"Information": "Rate limit"})
-        return mock_response, True
+        from agents.mock_data import get_mock_data
+        return get_mock_data(ticker_clean, function_name)
 
     # STAGE 1: RETRIEVAL (GET)
     # Check local cache for non-expired data before any network call
@@ -198,7 +94,7 @@ async def _fetch_alpha_vantage_async(function_name: str, ticker: str) -> tuple[d
     for attempt in range(settings.AV_MAX_RETRIES):
         try:
             # Use shared HTTP client with connection pooling and 5s timeout
-            response = await async_http_client.get(url, params=params, timeout=5.0)
+            response = await get_async_http_client().get(url, params=params, timeout=5.0)
             response.raise_for_status()
             data = response.json()
 
@@ -240,8 +136,6 @@ async def _fetch_finnhub(ticker: str) -> dict:
 
     try:
         # Fetch all data concurrently for speed
-        import asyncio
-        
         profile_task = asyncio.create_task(finnhub_company_profile(ticker))
         metrics_task = asyncio.create_task(finnhub_company_metrics(ticker))
         quote_task = asyncio.create_task(finnhub_quote(ticker))
@@ -356,6 +250,9 @@ async def financial_agent_async(state: dict) -> dict:
         "cash_position": None,  # backward compat for tests
     }
 
+    # Default company name so every branch (including empty Finnhub results) is safe
+    company_name = ticker
+
     # If Finnhub-only mode, skip Alpha Vantage entirely
     if _is_finnhub_mode():
         finnhub_res = await _fetch_finnhub(ticker)
@@ -373,7 +270,6 @@ async def financial_agent_async(state: dict) -> dict:
             company_name = info.get("longName") or ticker
         else:
             new_errors.append("Finnhub data unavailable")
-            overview_failed = True
     else:
         # 1. Try Alpha Vantage OVERVIEW
         overview_data, overview_was_live = await _fetch_alpha_vantage_async("OVERVIEW", ticker)
@@ -401,7 +297,6 @@ async def financial_agent_async(state: dict) -> dict:
 
             fd["market_cap"] = clean_float(raw_market_cap)
             fd["pe_ratio"] = clean_float(raw_pe)
-            raw_de = overview_data.get("DebtToEquity") or overview_data.get("debtToEquity")
             fd["debt_to_equity"] = normalize_debt_to_equity(clean_float(raw_de))
 
             # Revenue from overview (TTM)

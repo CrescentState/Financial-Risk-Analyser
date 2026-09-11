@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 import re
 
 from core.orchestrator import run_pipeline_async
+from core.resolver import search_companies
 from core.state import SystemState
 
 
@@ -25,7 +26,34 @@ class HealthCheckResponse(BaseModel):
     service: str
 
 
+class SearchCandidate(BaseModel):
+    symbol: str
+    name: str
+    type: str = ""
+    region: str = ""
+    freeTierSupported: bool = True
+
+
 TICKER_PATTERN = re.compile(r"^[A-Z0-9]{1,10}(?:\.[A-Z]{1,2})?$")
+
+# Company-name search: letters/digits plus common name punctuation
+# (length bounds enforced in validate_query, not in the pattern)
+QUERY_PATTERN = re.compile(r"^[A-Za-z0-9 .&'\-,()]+$")
+
+
+def validate_query(query: str) -> str:
+    """Clean and validate a company-name search query."""
+    clean = query.strip()
+    if len(clean) < 2:
+        raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
+    if len(clean) > 50:
+        raise HTTPException(status_code=400, detail="Search query must be at most 50 characters")
+    if not QUERY_PATTERN.match(clean):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid search query: '{query}'. Use letters, numbers, spaces and . & ' - , ( )",
+        )
+    return clean
 
 
 def validate_ticker(ticker: str) -> str:
@@ -39,6 +67,24 @@ def validate_ticker(ticker: str) -> str:
             detail=f"Invalid ticker format: '{ticker}'. Expected format: AAPL, BRK.B, etc."
         )
     return clean
+
+
+@router.get("/search/{query}", response_model=list[SearchCandidate])
+async def search_symbols(query: str):
+    """
+    Resolve a company name or keyword to ranked ticker candidates.
+
+    Powers the frontend autocomplete dropdown. Returns [] when nothing matches.
+    """
+    clean_query = validate_query(query)
+
+    try:
+        candidates = await search_companies(clean_query)
+        return [SearchCandidate(**c) for c in candidates]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Symbol search failed: {str(e)}")
 
 
 @router.post("/analyze/{ticker}", response_model=AnalysisResponse)

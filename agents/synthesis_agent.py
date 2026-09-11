@@ -1,13 +1,12 @@
 import json
 import asyncio
-from google import genai
+import sys
 from google.genai import types
 from pydantic import BaseModel, Field
 
 from core.state import SynthesisBrief
 from core.config import settings
-
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+from core.clients import get_gemini_client
 
 class SynthesisBriefResponse(BaseModel):
     company_snapshot: str = Field(
@@ -57,7 +56,7 @@ async def synthesis_agent_async(state: dict) -> dict:
     Consolidates financial metrics, market sentiment, and risk evaluation into a unified,
     actionable investment brief per the 6-section SynthesisBrief contract.
     """
-    new_errors = list(state.get("errors", []))  # Accumulate: read input errors + add new
+    new_errors: list[str] = []  # Only new errors; the LangGraph reducer accumulates across nodes
     ticker = state.get("ticker", "UNKNOWN").strip().upper()
     company_name = state.get("company_name", ticker)
     confidence_score = float(state.get("confidence_score", 1.0))
@@ -108,8 +107,6 @@ Return ONLY a JSON object with these 6 fields. Do not include any other fields.
         temperature=0.1,
     )
 
-    client = _genai_client
-
     # Fallback brief structure matching SynthesisBrief contract
     synthesis_brief: SynthesisBrief = {
         "company_snapshot": "Synthesis failed due to system exception.",
@@ -121,6 +118,7 @@ Return ONLY a JSON object with these 6 fields. Do not include any other fields.
     }
 
     try:
+        client = get_gemini_client()
         response = await asyncio.to_thread(
             client.models.generate_content,
             model=settings.GEMINI_MODEL,
@@ -172,13 +170,12 @@ Return ONLY a JSON object with these 6 fields. Do not include any other fields.
 
 def synthesis_agent_sync(state: dict) -> dict:
     """Synchronous wrapper for LangGraph sync node compatibility."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
+    test_mode = getattr(sys.modules.get('agents.synthesis_agent', {}), '_TEST_MODE_OVERRIDE', False)
 
-    if loop and loop.is_running():
-        future = asyncio.run_coroutine_threadsafe(synthesis_agent_async(state), loop)
-        return future.result()
-    else:
+    if test_mode:
         return asyncio.run(synthesis_agent_async(state))
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, synthesis_agent_async(state))
+        return future.result()

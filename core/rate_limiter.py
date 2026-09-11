@@ -20,20 +20,23 @@ class TokenBucketRateLimiter:
         self._lock = asyncio.Lock()
     
     async def acquire(self):
-        """Acquire a token, waiting if necessary."""
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.last_refill
-            # Refill tokens based on elapsed time
-            self._tokens = min(self.rate, self._tokens + elapsed * self.rate / self.per_seconds)
-            
-            if self._tokens < 1:
-                # Need to wait for token refill
+        """Acquire a token, waiting if necessary. Thread-safe and async-safe."""
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                elapsed = now - self.last_refill
+                self.last_refill = now
+                # Refill tokens based on elapsed time
+                self._tokens = min(self.rate, self._tokens + elapsed * self.rate / self.per_seconds)
+                
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+                # Calculate how long to wait for the next token
                 wait_time = (1 - self._tokens) * self.per_seconds / self.rate
-                await asyncio.sleep(wait_time)
-                self._tokens = 0
-            else:
-                self._tokens -= 1
+            
+            # Sleep OUTSIDE the lock so other tasks can proceed
+            await asyncio.sleep(wait_time)
 
 
 # Global Alpha Vantage rate limiter: 5 requests per minute

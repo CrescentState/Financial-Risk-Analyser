@@ -139,6 +139,25 @@ class TestPipelineIntegration:
         assert result["financial_data"]["data_available"] is False
         assert result["confidence_score"] < 1.0
 
+    def test_pipeline_errors_have_no_duplicates(self):
+        """Errors must not be duplicated as state flows through the graph.
+
+        Regression test: risk/synthesis used to echo input errors back into
+        their return value while the reducer also accumulated, duplicating
+        every prior error.
+        """
+        import agents.financial_agent
+        agents.financial_agent._TEST_MODE_OVERRIDE = True
+        import agents.news_agent
+        agents.news_agent._TEST_MODE_OVERRIDE = True
+        import agents.risk_agent
+        agents.risk_agent._TEST_MODE_OVERRIDE = True
+
+        result = run_pipeline("ZZZINVALID")
+
+        assert len(result["errors"]) > 0
+        assert len(result["errors"]) == len(set(result["errors"]))
+
     def test_pipeline_deterministic_recommendation_logic(self):
         """Test the deterministic recommendation logic matches contract."""
         import agents.financial_agent

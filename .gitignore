@@ -63,6 +63,8 @@ Thumbs.db
 node_modules/
 frontend/node_modules/
 frontend/dist/
+# Built frontend bundle served by FastAPI (regenerated via frontend build + copy to static/)
+static/
 
 # Docker
 .dockerignore
@@ -71,12 +73,7 @@ frontend/dist/
 run.py
 run.sh
 
-# TypeScript
-tsconfig*.json
-*.tsbuildinfo
-
-# Vite
-vite.config.ts
+# TypeScript build info (tsconfig*.json and vite.config.ts are source - keep tracked)
 *.tsbuildinfo
 
 # ESLint/Prettier
@@ -88,8 +85,7 @@ frontend/app.py
 frontend/components.py
 frontend/utils.py
 
-# Test files
-tests/
+# Frontend test files (backend tests/ is tracked - required for CI)
 *.test.ts
 *.test.tsx
 

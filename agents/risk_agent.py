@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from core.state import SystemState
 from core.config import settings
-from core.clients import gemini_client
+from core.clients import get_gemini_client
 
 
 class RiskAgentResponse(BaseModel):
@@ -61,7 +61,7 @@ def _calculate_risk_score(factors: list[str]) -> float:
 
 async def risk_agent_async(state: dict) -> dict:
     """Agent 3: Hybrid Risk Agent combining rule engine with LLM synthesis."""
-    new_errors = list(state.get("errors", []))  # Accumulate: read input errors + add new
+    new_errors: list[str] = []  # Only new errors; the LangGraph reducer accumulates across nodes
 
     financial_data = state.get("financial_data", {})
     news_data = state.get("news_data", {})
@@ -100,7 +100,7 @@ Do NOT output scores or new factors.
     risk_narrative = ""
     try:
         response = await asyncio.to_thread(
-            gemini_client.models.generate_content,
+            get_gemini_client().models.generate_content,
             model=settings.GEMINI_MODEL,
             contents=prompt,
             config=gen_config,
@@ -126,22 +126,16 @@ Do NOT output scores or new factors.
         risk_narrative = ""
 
     # Build risk_data with Python-calculated score and LLM narrative
-    risk_factors = _run_deterministic_rules(
-        state.get("financial_data", {}),
-        state.get("news_data", {})
-    )
-    risk_score = _calculate_risk_score(risk_factors)
-
     risk_data = {
         "risk_score": round(risk_score, 1),
         "risk_factors": risk_factors,
         "risk_narrative": risk_narrative,
     }
 
-    # Fallback: only if LLM failed (error occurred), use fallback score of 50
+    # Fallback: only if LLM failed (error occurred), keep Python-calculated score
     if not risk_narrative and new_errors:
         risk_data = {
-            "risk_score": 50.0,
+            "risk_score": round(risk_score, 1),
             "risk_factors": risk_factors,
             "risk_narrative": "Narrative unavailable due to system error.",
         }

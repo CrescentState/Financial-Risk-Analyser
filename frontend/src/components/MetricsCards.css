@@ -43,6 +43,10 @@
   font-weight: 500;
 }
 
+.metrics-incomplete-banner {
+  grid-column: 1 / -1;
+}
+
 .raw-data-toggle {
   grid-column: 1 / -1;
   margin-top: 0.5rem;

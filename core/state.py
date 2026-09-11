@@ -2,17 +2,22 @@ from typing import Annotated, List, Optional, TypedDict
 
 
 def _errors_reducer(left: List[str], right: List[str]) -> List[str]:
-    """Reducer that returns the right (latest) value - each agent returns the full accumulated error list."""
-    return right
+    """Reducer that accumulates errors from all agents."""
+    return left + right
 
 
-class FinancialData(TypedDict):
+class FinancialData(TypedDict, total=False):
     data_available: bool
+    data_complete: bool
     debt_to_equity: Optional[float]
     pe_ratio: Optional[float]
     yoy_revenue_growth: Optional[float]
     current_ratio: Optional[float]
     market_cap: Optional[int]
+    revenue: Optional[float]
+    net_income: Optional[float]
+    cash_position: Optional[float]
+    revenue_growth: Optional[float]
 
 
 class NewsData(TypedDict):

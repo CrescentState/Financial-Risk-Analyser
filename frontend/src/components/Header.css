@@ -154,6 +154,80 @@
   flex-shrink: 0;
 }
 
+.search-container {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.suggestions-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: white;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 200;
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.suggestion-item.active {
+  background: #eff6ff;
+}
+
+.suggestion-item.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Let the hovered/highlighted row wrap so the full company name is readable */
+.suggestion-item:hover .suggestion-name,
+.suggestion-item.active .suggestion-name {
+  white-space: normal;
+}
+
+.suggestion-symbol {
+  font-weight: 700;
+  color: #1e3a8a;
+  white-space: nowrap;
+}
+
+.suggestion-name {
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion-meta {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.suggestions-status {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: #6b7280;
+}
+
 @media (max-width: 768px) {
   .header {
     flex-wrap: wrap;

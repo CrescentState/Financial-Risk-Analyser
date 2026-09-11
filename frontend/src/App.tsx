@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Info } from 'lucide-react';
 import { Header } from './components/Header';
 import { MetricsCards } from './components/MetricsCards';
@@ -8,10 +8,15 @@ import { SynthesisBrief } from './components/SynthesisBrief';
 import { PipelineStatus } from './components/PipelineStatus';
 import { ErrorAlert } from './components/ErrorAlert';
 import { DegradedAlert } from './components/DegradedAlert';
-import { analyzeTicker } from './services/api';
-import type { PipelineResult } from './types';
+import { analyzeTicker, searchCompanies } from './services/api';
+import { isInternationalTicker } from './utils/tickers';
+import type { PipelineResult, SearchCandidate } from './types';
 import { RECOMMENDATION_COLORS, getConfidenceColor, getConfidenceLabel } from './utils/formatters';
 import './App.css';
+
+// Mirrors the backend TICKER_PATTERN (case-insensitive here; uppercased before use)
+const TICKER_PATTERN = /^[A-Z0-9]{1,10}(?:\.[A-Z]{1,2})?$/i;
+const SEARCH_DEBOUNCE_MS = 300;
 
 function App() {
   const [ticker, setTicker] = useState('AAPL');
@@ -20,6 +25,15 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [backendHealthy, setBackendHealthy] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
+  const [candidates, setCandidates] = useState<SearchCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const searchRequestId = useRef(0);
+  // Mirror of `loading` for use inside callbacks/effects without retriggering them
+  const loadingRef = useRef(loading);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -36,15 +50,45 @@ function App() {
     return () => clearInterval(interval);
   }, [fetchHealth]);
 
-  const handleAnalyze = async () => {
-    if (!ticker.trim()) return;
-    
+  // Refreshes candidates only; opening the dropdown is an explicit,
+  // user-driven action (typing, Enter on a name, input focus) so background
+  // refetches (e.g. after analysis completes) never pop it open.
+  const runSearch = useCallback(async (query: string) => {
+    const requestId = ++searchRequestId.current;
+    setSearching(true);
+    try {
+      const results = await searchCompanies(query);
+      if (requestId === searchRequestId.current) {
+        setCandidates(results);
+      }
+    } finally {
+      if (requestId === searchRequestId.current) {
+        setSearching(false);
+      }
+    }
+  }, []);
+
+  // Debounced autocomplete as the user types. `loading` is read via ref so
+  // the loading true->false flip after analysis cannot retrigger a fetch.
+  useEffect(() => {
+    if (loadingRef.current || ticker.trim().length < 2) {
+      if (ticker.trim().length < 2) setCandidates([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void runSearch(ticker);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [ticker, runSearch]);
+
+  const runAnalysis = async (symbol: string) => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setSuggestionsOpen(false);
 
     try {
-      const data = await analyzeTicker(ticker.trim().toUpperCase());
+      const data = await analyzeTicker(symbol);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
@@ -53,19 +97,69 @@ function App() {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleAnalyze();
+  const handleAnalyze = async () => {
+    const symbol = ticker.trim().toUpperCase();
+    if (!symbol) return;
+    if (isInternationalTicker(symbol)) {
+      setError(
+        `${symbol} looks like a non-US listing, which the Finnhub free tier does not cover. ` +
+        `Pick a US-listed suggestion from the dropdown instead.`
+      );
+      return;
+    }
+    await runAnalysis(symbol);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setTicker(value);
+    setSuggestionsOpen(true);
+  };
+
+  const handleSelectCandidate = async (candidate: SearchCandidate) => {
+    setTicker(candidate.symbol);
+    setCandidates([]);
+    setSuggestionsOpen(false);
+    await runAnalysis(candidate.symbol);
+  };
+
+  const handleEnterKey = async () => {
+    const query = ticker.trim();
+    if (!query) return;
+    if (TICKER_PATTERN.test(query.toUpperCase())) {
+      await handleAnalyze();
+    } else if (query.length < 2) {
+      setError('Type at least 2 characters of a ticker or company name.');
+    } else {
+      // Company name without a selection: fetch matches into the dropdown
+      setError(null);
+      await runSearch(query);
+      setSuggestionsOpen(true);
+    }
+  };
+
+  const handleInputFocus = () => {
+    if (candidates.length > 0) setSuggestionsOpen(true);
+  };
+
+  const handleCloseSuggestions = () => {
+    setSuggestionsOpen(false);
   };
 
   return (
     <div className="app">
       <Header 
         ticker={ticker}
-        setTicker={setTicker}
+        onSearchChange={handleSearchChange}
         onAnalyze={handleAnalyze}
-        onKeyDown={handleKeyDown}
+        onEnterKey={handleEnterKey}
         loading={loading}
         backendHealthy={backendHealthy}
+        suggestions={candidates}
+        searching={searching}
+        suggestionsOpen={suggestionsOpen}
+        onSelectCandidate={handleSelectCandidate}
+        onCloseSuggestions={handleCloseSuggestions}
+        onInputFocus={handleInputFocus}
       />
 
       <main className="main-content">
@@ -165,7 +259,7 @@ function App() {
         {!result && !loading && !error && (
           <div className="landing">
             <Info className="landing-icon" />
-            <h2>Enter a ticker symbol and click Analyze</h2>
+            <h2>Enter a ticker symbol or company name and click Analyze</h2>
             <p>Autonomous multi-agent due-diligence pipeline for US equities</p>
           </div>
         )}

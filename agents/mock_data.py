@@ -116,6 +116,28 @@ def get_mock_data(ticker: str, function_name: str):
     return mock_ticker.get(function_name, {"Information": "Rate limit"}), True
 
 
+# Mock symbol-search candidates in normalized resolver format:
+# {symbol, name, type, region}
+MOCK_SEARCH_CANDIDATES = [
+    {"symbol": "AAPL", "name": "Apple Inc", "type": "Common Stock", "region": "United States"},
+    {"symbol": "APLE", "name": "Apple Hospitality REIT Inc", "type": "Common Stock", "region": "United States"},
+    {"symbol": "TSLA", "name": "Tesla Inc", "type": "Common Stock", "region": "United States"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "type": "Common Stock", "region": "United States"},
+    {"symbol": "RELIANCE.NS", "name": "Reliance Industries Ltd", "type": "Equity", "region": "India"},
+]
+
+
+def get_mock_search(query: str):
+    """Get mock symbol-search candidates matching a query substring."""
+    q = query.strip().upper()
+    if len(q) < 2:
+        return []
+    return [
+        dict(c) for c in MOCK_SEARCH_CANDIDATES
+        if q in c["symbol"].upper() or q in c["name"].upper()
+    ]
+
+
 def get_mock_yfinance_data(ticker: str):
     """Get mock data for a ticker in yfinance/Finnhub format."""
     ticker_clean = ticker.strip().upper()
@@ -147,6 +169,17 @@ def get_mock_yfinance_data(ticker: str):
             "Total Stockholder Equity": float(latest.get("totalShareholderEquity", 0)) if latest.get("totalShareholderEquity") else None,
         }
 
+    # Revenue growth from the two annual reports (mirrors Finnhub revenueGrowth)
+    revenue_growth = None
+    if len(annual_reports) >= 2:
+        rev_curr = annual_reports[0].get("totalRevenue")
+        rev_prev = annual_reports[1].get("totalRevenue")
+        try:
+            if rev_curr and rev_prev and float(rev_prev) > 0:
+                revenue_growth = (float(rev_curr) - float(rev_prev)) / float(rev_prev)
+        except (ValueError, TypeError):
+            revenue_growth = None
+
     # Build info dict
     info = {
         "marketCap": float(overview.get("MarketCapitalization", 0)) if overview.get("MarketCapitalization") else None,
@@ -156,6 +189,7 @@ def get_mock_yfinance_data(ticker: str):
         "currentRatio": float(overview.get("CurrentRatio", 0)) if overview.get("CurrentRatio") else None,
         "totalCash": float(overview.get("CashPosition", 0)) if overview.get("CashPosition") else None,
         "debtToEquity": float(overview.get("DebtToEquity", 0)) if overview.get("DebtToEquity") else None,
+        "revenueGrowth": revenue_growth,
         "longName": overview.get("Name"),
         "shortName": overview.get("Symbol"),
     }

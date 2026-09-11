@@ -58,3 +58,11 @@ export interface PipelineStatus {
   risk: 'complete' | 'incomplete';
   synthesis: 'complete' | 'incomplete';
 }
+
+export interface SearchCandidate {
+  symbol: string;
+  name: string;
+  type?: string;
+  region?: string;
+  freeTierSupported?: boolean;
+}

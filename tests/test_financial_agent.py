@@ -144,6 +144,38 @@ class TestFinancialAgent:
         # confidence = 1.0 - 0.4 (degraded) - 0.05 (cash_position) = 0.55
         assert state["confidence_score"] == 0.55
 
+    def test_finnhub_only_mock_data_complete(self, monkeypatch):
+        """Mock Finnhub data (incl. revenueGrowth) yields complete financial_data."""
+        monkeypatch.setenv("USE_FINNHUB_ONLY", "true")
+
+        state = init_state("AAPL")
+        result = financial_agent(state)
+
+        fd = result["financial_data"]
+        assert fd["data_available"] is True
+        assert fd["revenue_growth"] is not None and fd["revenue_growth"] > 0
+        assert result["company_name"] == "Apple Inc."
+
+    def test_finnhub_only_empty_response_no_crash(self, monkeypatch):
+        """Finnhub-only mode with empty data must degrade gracefully, not crash.
+
+        Regression test: company_name was unbound on this path (UnboundLocalError).
+        """
+        import agents.financial_agent as fa
+
+        async def mock_empty_finnhub(ticker: str):
+            return {}  # Simulate Finnhub outage / unknown ticker
+
+        monkeypatch.setattr(fa, "_fetch_finnhub", mock_empty_finnhub)
+        monkeypatch.setenv("USE_FINNHUB_ONLY", "true")
+
+        state = init_state("AAPL")
+        result = financial_agent(state)
+
+        assert result["company_name"] == "AAPL"
+        assert result["financial_data"]["data_available"] is False
+        assert any("Finnhub data unavailable" in e for e in result["errors"])
+
     # ===== CACHING LAYER TESTS =====
 
     def test_cache_hit_avoids_network_call(self, alpha_vantage_key):

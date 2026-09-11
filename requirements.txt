@@ -1,13 +1,14 @@
 # Production dependencies for Financial Risk Analyser
+# NOTE: kept in sync with pyproject.toml (Render installs from this file,
+# Docker builds from pyproject.toml + uv.lock).
 fastapi>=0.139.0
 uvicorn[standard]>=0.49.0
 gunicorn>=26.2.0
 langgraph>=1.2.7
 google-genai>=2.14.0
 httpx>=0.28.1
-finnhub-python>=2.4.0
+finnhub-python>=2.4.29
 feedparser>=6.0.13
 pydantic>=2.13.4
 pydantic-settings>=2.15.0
 python-dotenv>=1.2.2
-requests>=2.34.2

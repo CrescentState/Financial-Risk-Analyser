@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios';
-import type { PipelineResult } from '../types';
+import type { PipelineResult, SearchCandidate } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
@@ -17,7 +17,7 @@ export interface ApiError {
 
 export const analyzeTicker = async (ticker: string): Promise<PipelineResult> => {
   try {
-    const response = await api.post<PipelineResult>(`/analyze/${ticker.toUpperCase()}`);
+    const response = await api.post<PipelineResult>(`/analyze/${encodeURIComponent(ticker.toUpperCase())}`);
     return response.data;
   } catch (error) {
     if (axios.isAxiosError(error)) {
@@ -46,5 +46,18 @@ export const checkHealth = async (): Promise<boolean> => {
     return response.status === 200;
   } catch {
     return false;
+  }
+};
+
+export const searchCompanies = async (query: string): Promise<SearchCandidate[]> => {
+  const clean = query.trim();
+  if (clean.length < 2) return [];
+  try {
+    const response = await api.get<SearchCandidate[]>(`/search/${encodeURIComponent(clean)}`, {
+      timeout: 8000,
+    });
+    return Array.isArray(response.data) ? response.data : [];
+  } catch {
+    return [];
   }
 };

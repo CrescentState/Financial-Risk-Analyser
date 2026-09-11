@@ -24,18 +24,13 @@ const metricItems: Array<{
 ];
 
 export function MetricsCards({ data }: MetricsCardsProps) {
-  if (!data.data_available) {
-    return (
-      <div className="metrics-unavailable">
-        <div className="warning-banner">
-          ⚠️ Financial data incomplete — some fields unavailable
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="metrics-grid">
+      {!data.data_available && (
+        <div className="warning-banner metrics-incomplete-banner">
+          ⚠️ Financial data incomplete — showing available fields
+        </div>
+      )}
       {metricItems.map(({ key, label, formatter }) => (
         <div key={key} className="metric-card">
           <div className="metric-label">{label}</div>

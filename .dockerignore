@@ -30,6 +30,8 @@ ENV/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+# Served bundle is rebuilt inside the image; never copy a stale local one
+static/
 
 # IDE
 .vscode/

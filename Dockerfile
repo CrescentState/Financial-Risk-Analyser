@@ -86,7 +86,7 @@ CMD exec gunicorn main:app \
     --workers 2 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:${PORT} \
-    --timeout 120 \
+    --timeout 180 \
     --access-logfile - \
     --error-logfile - \
     --log-level info

@@ -142,7 +142,7 @@ from core.state import init_state
 from agents.risk_agent import risk_agent_sync as risk_agent, _run_deterministic_rules, _calculate_risk_score
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_success_path(mock_generate_content):
     """Verify happy path execution updates risk_data schema correctly."""
     state = init_state("AAPL")
@@ -155,7 +155,7 @@ def test_risk_agent_success_path(mock_generate_content):
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({"risk_narrative": "Apple maintains a robust balance sheet with healthy margins."})
-    mock_generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Apple maintains a robust balance sheet with healthy margins."}))
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Apple maintains a robust balance sheet with healthy margins."}))
 
     res_state = risk_agent(state)
 
@@ -167,7 +167,7 @@ def test_risk_agent_success_path(mock_generate_content):
     assert len(res_state["errors"]) == 0
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_exception_fallback(mock_generate_content):
     """Verify fallback behavior when Gemini API call fails."""
     state = init_state("TSLA")
@@ -176,19 +176,19 @@ def test_risk_agent_exception_fallback(mock_generate_content):
     })
     state["news_data"] = {"sentiment_score": 0.0, "news_available": True, "key_events": [], "red_flags": [], "summary": ""}
 
-    mock_generate_content.side_effect = Exception("API Connection Timeout")
+    mock_generate_content.return_value.models.generate_content.side_effect = Exception("API Connection Timeout")
 
     res_state = risk_agent(state)
 
-    # Python score is 0 (D/E = 2.5 not > 2.5), fallback returns 50
-    assert res_state["risk_data"]["risk_score"] == 50.0
+    # Python score is 0 (D/E = 2.5 not > 2.5); fallback preserves the Python score
+    assert res_state["risk_data"]["risk_score"] == 0.0
     assert len(res_state["risk_data"]["risk_factors"]) >= 0
     assert any("Risk Agent execution failed" in err for err in res_state["errors"])
 
 
 # ===== NEW TESTS FOR GAPS =====
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_confidence_score_unmodified(mock_generate_content):
     """Risk agent should not modify confidence_score."""
     state = init_state("AAPL")
@@ -202,14 +202,14 @@ def test_risk_agent_confidence_score_unmodified(mock_generate_content):
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({"risk_narrative": "Low risk"})
-    mock_generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Low risk"}))
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Low risk"}))
 
     res_state = risk_agent(state)
 
     assert res_state["confidence_score"] == 0.85
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_revenue_growth_format(mock_generate_content):
     """Revenue growth in triggered flag should be formatted as percentage."""
     state = init_state("TEST")
@@ -222,7 +222,7 @@ def test_risk_agent_revenue_growth_format(mock_generate_content):
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({"risk_narrative": "Moderate risk"})
-    mock_generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Moderate risk"}))
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Moderate risk"}))
 
     res_state = risk_agent(state)
 
@@ -232,7 +232,7 @@ def test_risk_agent_revenue_growth_format(mock_generate_content):
     assert "-15.00%" in neg_growth_flag
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_missing_financial_data_fields(mock_generate_content):
     """Risk agent should handle missing (None) financial_data fields gracefully."""
     state = init_state("TEST")
@@ -245,7 +245,7 @@ def test_risk_agent_missing_financial_data_fields(mock_generate_content):
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({"risk_narrative": "Insufficient data for risk assessment."})
-    mock_generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Insufficient data for risk assessment."}))
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Insufficient data for risk assessment."}))
 
     res_state = risk_agent(state)
 
@@ -254,7 +254,7 @@ def test_risk_agent_missing_financial_data_fields(mock_generate_content):
     assert len(res_state["errors"]) == 0
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_gemini_timeout(mock_generate_content):
     """Gemini timeout should trigger fallback."""
     import asyncio
@@ -262,16 +262,16 @@ def test_risk_agent_gemini_timeout(mock_generate_content):
     state["financial_data"].update({"debt_to_equity": 1.0})
     state["news_data"] = {"sentiment_score": 0.0, "news_available": True, "key_events": [], "red_flags": [], "summary": ""}
 
-    mock_generate_content.side_effect = asyncio.TimeoutError("Request timed out")
+    mock_generate_content.return_value.models.generate_content.side_effect = asyncio.TimeoutError("Request timed out")
 
     res_state = risk_agent(state)
 
-    # Python score is 0, fallback is 50
-    assert res_state["risk_data"]["risk_score"] == 50.0
+    # Python score is 0; fallback preserves the Python-calculated score
+    assert res_state["risk_data"]["risk_score"] == 0.0
     assert any("Risk Agent execution failed" in err for err in res_state["errors"])
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_empty_key_concerns(mock_generate_content):
     """Risk agent should handle empty key_concerns list from Gemini."""
     state = init_state("AAPL")
@@ -280,14 +280,14 @@ def test_risk_agent_empty_key_concerns(mock_generate_content):
 
     mock_response = MagicMock()
     mock_response.text = json.dumps({"risk_narrative": "Very low risk"})
-    mock_generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Very low risk"}))
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(text=json.dumps({"risk_narrative": "Very low risk"}))
 
     res_state = risk_agent(state)
 
     assert res_state["risk_data"]["risk_factors"] == []
 
 
-@patch("core.clients.gemini_client.models.generate_content")
+@patch("agents.risk_agent.get_gemini_client")
 def test_risk_agent_prompt_includes_financial_data(mock_generate_content):
     """Prompt sent to Gemini should include the financial_data JSON."""
     state = init_state("TEST")
@@ -308,7 +308,7 @@ def test_risk_agent_prompt_includes_financial_data(mock_generate_content):
         mock_response.text = json.dumps({"risk_narrative": "Test"})
         return mock_response
 
-    mock_generate_content.side_effect = capture_prompt
+    mock_generate_content.return_value.models.generate_content.side_effect = capture_prompt
 
     risk_agent(state)
 

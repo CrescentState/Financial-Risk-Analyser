@@ -2,6 +2,7 @@ import asyncio
 import calendar
 import html
 import json
+import logging
 import sys
 import re
 import time
@@ -9,13 +10,23 @@ import urllib.parse
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import feedparser
-import requests
+import httpx
 from google import genai
 from google.genai import types
 
 from core.state import SystemState, NewsData
 from core.config import settings
-from core.clients import gemini_client
+from core.clients import get_gemini_client, get_async_http_client
+
+logger = logging.getLogger(__name__)
+
+RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+RSS_TIMEOUT_SECONDS = 10.0
+RSS_MAX_ATTEMPTS = 3
 
 
 def _clean_html_text(raw_html: str) -> str:
@@ -60,6 +71,44 @@ def _validate_sentiment_payload(payload: dict) -> bool:
     return True
 
 
+def _is_rss_retryable(exc: Exception) -> bool:
+    """Transient RSS failures (timeouts, 429, 5xx, transport errors) merit a retry."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or 500 <= status < 600
+    return isinstance(exc, httpx.TransportError)
+
+
+async def _fetch_finnhub_company_news(ticker: str) -> list[dict]:
+    """Finnhub company-news fallback shaped like RSS articles.
+
+    Returns [{title, summary}] bounded to MAX_NEWS_ARTICLES, or [] when
+    unavailable. Never raises - the caller records a fallback note instead.
+    """
+    try:
+        from core.clients import finnhub_company_news
+        from datetime import timedelta
+
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=settings.NEWS_LOOKBACK_DAYS)
+        raw = await finnhub_company_news(
+            (ticker or "").strip().upper(), _from=start.isoformat(), to=today.isoformat()
+        )
+    except Exception as e:
+        logger.warning(f"Finnhub company-news fallback failed: {e}")
+        return []
+    articles = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("headline") or "No Title"
+        summary = _clean_html_text(item.get("summary") or "") or "No Summary Available"
+        articles.append({"title": title, "summary": summary})
+    return articles[: settings.MAX_NEWS_ARTICLES]
+
+
 async def news_agent_async(state: dict) -> dict:
     """Async News & Sentiment Agent with non-blocking RSS fetch and Gemini call."""
     new_errors = []
@@ -87,25 +136,44 @@ async def news_agent_async(state: dict) -> dict:
             "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
         }
 
-    # Query: when:30d to match NEWS_LOOKBACK_DAYS
-    raw_query = f'"{company_name}" (stock OR earnings OR financial) when:30d'
+    # Query: when:Xd to match NEWS_LOOKBACK_DAYS
+    raw_query = f'"{company_name}" (stock OR earnings OR financial) when:{settings.NEWS_LOOKBACK_DAYS}d'
     encoded_query = urllib.parse.quote(raw_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
-    # Non-blocking RSS fetch via requests.get with timeout=5
-    try:
-        resp = await asyncio.to_thread(
-            requests.get,
-            rss_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=5.0
+    # RSS fetch with retries (shared httpx client, browser-like headers).
+    # The status code is kept in the error message so failures are diagnosable.
+    resp = None
+    attempts_made = 0
+    last_error: Exception | None = None
+    for attempt in range(RSS_MAX_ATTEMPTS):
+        try:
+            resp = await get_async_http_client().get(
+                rss_url,
+                headers=RSS_HEADERS,
+                timeout=RSS_TIMEOUT_SECONDS
+            )
+            resp.raise_for_status()
+            attempts_made = attempt + 1
+            break
+        except Exception as e:
+            last_error = e
+            attempts_made = attempt + 1
+            if not _is_rss_retryable(e) or attempt >= RSS_MAX_ATTEMPTS - 1:
+                break
+            await asyncio.sleep(1.0 * (2 ** attempt))
+    entries = []
+    if resp is None:
+        new_errors.append(
+            f"Network failure accessing RSS Feed after {attempts_made} attempt(s): {last_error}"
         )
-        resp.raise_for_status()
-        feed = feedparser.parse(resp.content)
-        entries = feed.get("entries", [])
-    except Exception as e:
-        new_errors.append(f"Network failure accessing RSS Feed: {str(e)}")
-        entries = []
+    else:
+        try:
+            feed = feedparser.parse(resp.content)
+            entries = feed.get("entries", [])
+        except Exception as e:
+            new_errors.append(f"RSS feed parse failed: {str(e)}")
+            entries = []
 
     # UTC-Safe Date Filtering using email.utils.parsedate_to_datetime
     current_time = datetime.now(timezone.utc)
@@ -128,7 +196,14 @@ async def news_agent_async(state: dict) -> dict:
         else:
             valid_entries.append(entry)
 
+    extracted_news = []
     if not valid_entries:
+        # RSS yielded nothing usable: try Finnhub company-news before degrading
+        extracted_news = await _fetch_finnhub_company_news(state.get("ticker", ""))
+        if extracted_news:
+            new_errors.append("RSS feed unavailable; used Finnhub company news fallback.")
+
+    if not valid_entries and not extracted_news:
         new_errors.append(
             f"No news articles within {settings.NEWS_LOOKBACK_DAYS} days found for: '{raw_query}'."
         )
@@ -141,12 +216,12 @@ async def news_agent_async(state: dict) -> dict:
             "confidence_score": max(0.0, round(state.get("confidence_score", 1.0) - 0.1, 2)),
         }
 
-    extracted_news = []
-    for entry in valid_entries[:settings.MAX_NEWS_ARTICLES]:
-        title = entry.get("title", "No Title")
-        raw_summary = entry.get("summary", "")
-        clean_summary = _clean_html_text(raw_summary) or "No Summary Available"
-        extracted_news.append({"title": title, "summary": clean_summary})
+    if not extracted_news:
+        for entry in valid_entries[:settings.MAX_NEWS_ARTICLES]:
+            title = entry.get("title", "No Title")
+            raw_summary = entry.get("summary", "")
+            clean_summary = _clean_html_text(raw_summary) or "No Summary Available"
+            extracted_news.append({"title": title, "summary": clean_summary})
 
     formatted_articles = ""
     for idx, article in enumerate(extracted_news, 1):
@@ -176,7 +251,7 @@ Articles Data:
     # Non-blocking Gemini call via thread pool
     try:
         response = await asyncio.to_thread(
-            gemini_client.models.generate_content,
+            get_gemini_client().models.generate_content,
             model=settings.GEMINI_MODEL,
             contents=base_prompt,
             config=gen_config,
@@ -202,7 +277,7 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
 """
         try:
             response_retry = await asyncio.to_thread(
-                gemini_client.models.generate_content,
+                get_gemini_client().models.generate_content,
                 model=settings.GEMINI_MODEL,
                 contents=retry_prompt,
                 config=gen_config,
