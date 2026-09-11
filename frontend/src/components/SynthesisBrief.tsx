@@ -9,12 +9,11 @@ interface SynthesisBriefProps {
 const sections: Array<{
   key: keyof SynthesisReport;
   title: string;
-  icon: string;
 }> = [
-  { key: 'company_snapshot', title: 'Company Snapshot', icon: '🏢' },
-  { key: 'financial_health', title: 'Financial Health', icon: '💰' },
-  { key: 'market_sentiment', title: 'Market Sentiment', icon: '📈' },
-  { key: 'risk_assessment', title: 'Risk Assessment', icon: '⚠️' },
+  { key: 'company_snapshot', title: 'Company Snapshot' },
+  { key: 'financial_health', title: 'Financial Health' },
+  { key: 'market_sentiment', title: 'Market Sentiment' },
+  { key: 'risk_assessment', title: 'Risk Assessment' },
 ];
 
 export function SynthesisBrief({ data }: SynthesisBriefProps) {
@@ -30,14 +29,13 @@ export function SynthesisBrief({ data }: SynthesisBriefProps) {
     setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const renderSection = (section: { key: string; title: string; icon: string }) => (
+  const renderSection = (section: { key: string; title: string }) => (
     <div key={section.key} className="section-expansion">
       <button
         className="section-header"
         onClick={() => toggleSection(section.key)}
         aria-expanded={openSections[section.key]}
       >
-        <span className="section-icon">{section.icon}</span>
         <span className="section-title">{section.title}</span>
         <span className="section-chevron">{openSections[section.key] ? '▼' : '▶'}</span>
       </button>
@@ -65,7 +63,6 @@ export function SynthesisBrief({ data }: SynthesisBriefProps) {
             onClick={() => toggleSection('key_concerns')}
             aria-expanded={openSections.key_concerns}
           >
-            <span className="section-icon">🎯</span>
             <span className="section-title">Key Concerns</span>
             <span className="section-chevron">{openSections.key_concerns ? '▼' : '▶'}</span>
           </button>
@@ -86,7 +83,7 @@ export function SynthesisBrief({ data }: SynthesisBriefProps) {
       </div>
 
       <details className="raw-data-toggle">
-        <summary>🔍 Raw Synthesis Data</summary>
+        <summary>Raw Synthesis Data</summary>
         <pre className="raw-data">{JSON.stringify(data, null, 2)}</pre>
       </details>
     </div>

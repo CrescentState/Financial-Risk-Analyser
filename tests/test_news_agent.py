@@ -634,18 +634,105 @@ class TestNewsAgent:
         with patch("core.clients.finnhub_company_news", new=AsyncMock(return_value=raw)):
             articles = asyncio.run(_fetch_finnhub_company_news("TSLA"))
         assert len(articles) == 10  # bounded to MAX_NEWS_ARTICLES
-        assert articles[0] == {"title": "Headline 0", "summary": "Summary 0"}
+        assert articles[0] == {
+            "title": "Headline 0", "summary": "Summary 0",
+            "url": "http://x", "source": "Unknown",
+        }
 
         short_raw = [{"headline": "", "summary": "<p>S</p>"}]
         with patch("core.clients.finnhub_company_news", new=AsyncMock(return_value=short_raw)):
             short_articles = asyncio.run(_fetch_finnhub_company_news("TSLA"))
-        assert short_articles == [{"title": "No Title", "summary": "S"}]
+        assert short_articles == [{"title": "No Title", "summary": "S", "url": "", "source": "Unknown"}]
 
     def test_finnhub_company_news_never_raises(self):
         from agents.news_agent import _fetch_finnhub_company_news
         with patch("core.clients.finnhub_company_news",
                    new=AsyncMock(side_effect=Exception("down"))):
             assert asyncio.run(_fetch_finnhub_company_news("TSLA")) == []
+
+    # ===== ARTICLE SHAPING TESTS =====
+
+    def test_split_google_title(self):
+        from agents.news_agent import _split_google_title
+        assert _split_google_title("Apple beats estimates - Reuters") == (
+            "Apple beats estimates", "Reuters")
+        assert _split_google_title("No separator here") == ("No separator here", "Unknown")
+        assert _split_google_title("") == ("No Title", "Unknown")
+
+    @patch("agents.news_agent.get_async_http_client")
+    @patch("agents.news_agent.get_gemini_client")
+    def test_articles_included_in_success(self, mock_gemini_client, mock_http_client):
+        mock_resp = MagicMock()
+        mock_resp.content = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+    <title>Test Feed</title>
+    <item>
+        <title>Deal done - Bloomberg</title>
+        <summary><p>Summary 0</p></summary>
+        <link>http://example.com/deal</link>
+        <pubDate>Mon, 23 Aug 2026 08:02:07 +0000</pubDate>
+    </item>
+</channel>
+</rss>"""
+        mock_resp.raise_for_status = MagicMock()
+        mock_http_client.return_value.get = AsyncMock(return_value=mock_resp)
+
+        mock_response = MagicMock()
+        mock_response.text = json.dumps({
+            "sentiment_score": 0.3,
+            "key_events": ["Deal done."],
+            "red_flags": [],
+            "summary": "Good."
+        })
+        mock_gemini_client.return_value.models.generate_content.return_value = mock_response
+
+        result_state = news_agent({
+            "company_name": "Tesla", "ticker": "TSLA",
+            "confidence_score": 1.0, "errors": []
+        })
+
+        assert result_state["news_data"]["articles"] == [{
+            "title": "Deal done",
+            "summary": "Summary 0",
+            "url": "http://example.com/deal",
+            "source": "Bloomberg",
+        }]
+
+    @patch("agents.news_agent.get_async_http_client")
+    @patch("agents.news_agent.get_gemini_client")
+    def test_articles_kept_on_validation_failure(self, mock_gemini_client, mock_http_client):
+        mock_resp = MagicMock()
+        mock_resp.content = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+    <title>Test Feed</title>
+    <item>
+        <title>Some headline</title>
+        <summary>Some summary</summary>
+        <pubDate>Mon, 23 Aug 2026 08:02:07 +0000</pubDate>
+    </item>
+</channel>
+</rss>"""
+        mock_resp.raise_for_status = MagicMock()
+        mock_http_client.return_value.get = AsyncMock(return_value=mock_resp)
+
+        mock_bad_response = MagicMock()
+        mock_bad_response.text = "not valid json at all"
+        mock_gemini_client.return_value.models.generate_content.return_value = mock_bad_response
+
+        result_state = news_agent({
+            "company_name": "Tesla", "ticker": "TSLA",
+            "confidence_score": 1.0, "errors": []
+        })
+
+        assert result_state["news_data"]["news_available"] is False
+        assert result_state["news_data"]["articles"] == [{
+            "title": "Some headline",
+            "summary": "Some summary",
+            "url": "",
+            "source": "Unknown",
+        }]
 
 
 if __name__ == "__main__":

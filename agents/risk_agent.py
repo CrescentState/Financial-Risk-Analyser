@@ -42,6 +42,52 @@ def _run_deterministic_rules(financial_data: dict, news_data: dict) -> list[str]
     return factors
 
 
+# Rule catalog: stable IDs + plain-English explanations for the terminal UI.
+# Thresholds live in _run_deterministic_rules; templates here are display-only
+# (deterministic Python strings, no extra LLM calls).
+_RULE_CATALOG = [
+    ("R-01", "High Leverage",
+     "High leverage",
+     "The company owes more than 2.5x its shareholder equity. "
+     "If earnings slip, those debt payments get harder to meet."),
+    ("R-02", "Negative Shareholder Equity",
+     "Negative equity",
+     "Liabilities exceed assets on paper - a sign of balance-sheet distress."),
+    ("R-03", "Revenue Contraction",
+     "Revenue contraction",
+     "Revenue is contracting ({detail} year over year) - "
+     "the business is getting smaller, not growing."),
+    ("R-04", "Unprofitable",
+     "Unprofitable",
+     "Zero or negative earnings multiple means the company is not currently profitable."),
+    ("R-05", "Hostile Media",
+     "Hostile media",
+     "Recent news coverage leans strongly negative, which often moves the price."),
+]
+
+
+def describe_risk_factors(factors: list[str]) -> list[dict]:
+    """Map triggered factor strings to structured {id, label, explanation} entries."""
+    details = []
+    for factor in factors:
+        for rule_id, prefix, label, template in _RULE_CATALOG:
+            if factor.startswith(prefix):
+                remainder = factor[len(prefix):].strip().strip("()")
+                if "{detail}" in template:
+                    explanation = template.format(detail=remainder or "n/a")
+                else:
+                    explanation = template
+                details.append({"id": rule_id, "label": label, "explanation": explanation})
+                break
+        else:
+            details.append({
+                "id": "R-00",
+                "label": factor,
+                "explanation": "Flagged by the risk engine.",
+            })
+    return details
+
+
 def _calculate_risk_score(factors: list[str]) -> float:
     """Calculate risk score from factors."""
     score = 0.0
@@ -125,11 +171,15 @@ Do NOT output scores or new factors.
         new_errors.append(f"Risk Agent execution failed: {str(e)}")
         risk_narrative = ""
 
+    # Structured details for the terminal UI (IDs + plain-English explanations)
+    risk_details = describe_risk_factors(risk_factors)
+
     # Build risk_data with Python-calculated score and LLM narrative
     risk_data = {
         "risk_score": round(risk_score, 1),
         "risk_factors": risk_factors,
         "risk_narrative": risk_narrative,
+        "risk_details": risk_details,
     }
 
     # Fallback: only if LLM failed (error occurred), keep Python-calculated score
@@ -138,6 +188,7 @@ Do NOT output scores or new factors.
             "risk_score": round(risk_score, 1),
             "risk_factors": risk_factors,
             "risk_narrative": "Narrative unavailable due to system error.",
+            "risk_details": risk_details,
         }
 
     return {

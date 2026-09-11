@@ -1,10 +1,38 @@
 import asyncio
+import time
 from langgraph.graph import StateGraph, END
 from core.state import SystemState, init_state
 from agents.financial_agent import financial_agent_async
 from agents.news_agent import news_agent_async
 from agents.risk_agent import risk_agent_async
 from agents.synthesis_agent import synthesis_agent_async
+
+
+def _merge_timing(state: SystemState, result: dict, name: str, elapsed: float) -> dict:
+    """Attach this node's wall-clock seconds to the timings channel."""
+    timings = dict(state.get("timings", {}))
+    timings[name] = round(elapsed, 2)
+    return {**result, "timings": timings}
+
+
+def _timed_sync(name: str, fn):
+    """Wrap a sync node so its duration is recorded under `name`."""
+    def wrapper(state: SystemState) -> dict:
+        start = time.perf_counter()
+        result = fn(state)
+        return _merge_timing(state, result, name, time.perf_counter() - start)
+    wrapper.__name__ = f"timed_{name}"
+    return wrapper
+
+
+def _timed_async(name: str, fn):
+    """Wrap an async node so its duration is recorded under `name`."""
+    async def wrapper(state: SystemState) -> dict:
+        start = time.perf_counter()
+        result = await fn(state)
+        return _merge_timing(state, result, name, time.perf_counter() - start)
+    wrapper.__name__ = f"timed_{name}"
+    return wrapper
 
 
 def _sync_financial_agent(state: SystemState) -> dict:
@@ -29,10 +57,21 @@ def _sync_financial_news_parallel_node(state: SystemState) -> dict:
 
 async def _run_financial_and_news_parallel(state: SystemState) -> dict:
     """Run financial_agent and news_agent concurrently."""
+    # Time each inner agent so parallel and sequential modes expose
+    # the same timing keys (financial, news, risk, synthesis).
+    durations: dict[str, float] = {}
+
+    async def _run_timed(name: str, coro):
+        start = time.perf_counter()
+        try:
+            return await coro
+        finally:
+            durations[name] = round(time.perf_counter() - start, 2)
+
     # Run both agents concurrently using their native async implementations
-    financial_task = asyncio.create_task(financial_agent_async(state))
-    news_task = asyncio.create_task(news_agent_async(state))
-    
+    financial_task = asyncio.create_task(_run_timed("financial", financial_agent_async(state)))
+    news_task = asyncio.create_task(_run_timed("news", news_agent_async(state)))
+
     financial_result, news_result = await asyncio.gather(financial_task, news_task)
     
     # Merge results carefully:
@@ -57,7 +96,11 @@ async def _run_financial_and_news_parallel(state: SystemState) -> dict:
             merged["confidence_score"] = min(merged.get("confidence_score", 1.0), value)
         else:
             merged[key] = value
-    
+
+    merged_timings = dict(merged.get("timings", {}))
+    merged_timings.update(durations)
+    merged["timings"] = merged_timings
+
     return merged
 
 
@@ -76,10 +119,10 @@ def create_pipeline(parallel: bool = True):
     workflow = StateGraph(SystemState)
     
     # Add nodes for each agent (sync wrappers for sync pipeline)
-    workflow.add_node("financial_agent", _sync_financial_agent)
-    workflow.add_node("news_agent", _sync_news_agent)
-    workflow.add_node("risk_agent", _sync_risk_agent)
-    workflow.add_node("synthesis_agent", _sync_synthesis_agent)
+    workflow.add_node("financial_agent", _timed_sync("financial", _sync_financial_agent))
+    workflow.add_node("news_agent", _timed_sync("news", _sync_news_agent))
+    workflow.add_node("risk_agent", _timed_sync("risk", _sync_risk_agent))
+    workflow.add_node("synthesis_agent", _timed_sync("synthesis", _sync_synthesis_agent))
     
     if parallel:
         # PARALLEL: combined financial+news node runs both concurrently
@@ -110,10 +153,10 @@ def create_pipeline_async(parallel: bool = True):
     workflow = StateGraph(SystemState)
     
     # Add nodes for each agent (async versions)
-    workflow.add_node("financial_agent", financial_agent_async)
-    workflow.add_node("news_agent", news_agent_async)
-    workflow.add_node("risk_agent", risk_agent_async)
-    workflow.add_node("synthesis_agent", synthesis_agent_async)
+    workflow.add_node("financial_agent", _timed_async("financial", financial_agent_async))
+    workflow.add_node("news_agent", _timed_async("news", news_agent_async))
+    workflow.add_node("risk_agent", _timed_async("risk", risk_agent_async))
+    workflow.add_node("synthesis_agent", _timed_async("synthesis", synthesis_agent_async))
     
     if parallel:
         # PARALLEL: combined financial+news node runs both concurrently

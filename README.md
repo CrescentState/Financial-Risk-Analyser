@@ -122,7 +122,7 @@
 | **Core Frameworks**   | Python 3.11+ (deploy), LangGraph 1.x, FastAPI, Pydantic v2, httpx                                  |
 | **AI Models**         | Google Gemini (`GEMINI_MODEL`, default `gemini-3.5-flash-lite`) via `google-genai` SDK             |
 | **External APIs**     | Alpha Vantage (25/day, 5/min free), Finnhub (free tier: US listings only), Google News RSS         |
-| **Testing & Quality** | Pytest 9.x, unittest.mock, 122 tests (100% pass), `tsc --noEmit` frontend typecheck                |
+| **Testing & Quality** | Pytest 9.x, unittest.mock, 131 tests (100% pass), `tsc --noEmit` frontend typecheck                |
 | **Infrastructure**    | File-based cache (24hr TTL, atomic writes, hit/miss debug logs), accumulating error reducer        |
 | **Frontend**          | React 18 + Vite + TypeScript, served from `static/` (rebuilt via `frontend/dist`)                  |
 
@@ -317,8 +317,22 @@ rm -rf static/* && cp -r frontend/dist/* static/
 
 Features: ticker/company-name search box with autocomplete dropdown (non-US
 listings grayed out with `freeTierSupported: false`), financial metrics with
-graceful partial display (`N/A` per missing field), Plotly risk gauge, news
-sentiment, 6-section synthesis brief, raw-data debug tab.
+graceful partial display (`N/A` per missing field), custom SVG risk gauge,
+news sentiment with per-article coverage list, 6-section synthesis brief,
+pipeline trace (per-agent timings), raw-data debug tab.
+
+UI identity is a financial research terminal: ink-on-paper neutrals, IBM Plex
+Sans/Mono, metric ledger with group verdicts, rule list with stable IDs
+(`R-01`…`R-05`) and plain-English explanations, verdict-first hero with a
+plain-language one-liner. Color is disciplined: the risk ramp carries status,
+directional green/red marks signed figures, and one interactive blue
+(`--interactive`) marks links/active tab only. Analyst depth (ledger, trace,
+raw JSON) and normal-user guidance (verdicts, explanations, humanized empty
+states) come from the same data — see `Chrimatos UI Design Document.md`.
+
+New API fields (all additive, backward compatible): per-agent `timings`
+(`financial`, `news`, `risk`, `synthesis` seconds), `risk_details`
+(`{id, label, explanation}`), `news.articles` (`{title, summary, url, source}`).
 
 ### Deploy notes (Render / Docker)
 
@@ -464,7 +478,7 @@ Minimum: 0.0 (clamped)
 ### Run Tests
 
 ```bash
-# All tests (122 tests; integration hits live APIs, ~2 min)
+# All tests (131 tests; integration hits live APIs, ~2 min)
 python -m pytest tests/ -v
 
 # Individual suites
@@ -487,14 +501,14 @@ cd frontend && npm run typecheck
 | Test Suite                     | Tests | Coverage Focus                                                                                   |
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------ |
 | `test_financial_agent.py`      | 20    | Cache, fallback, edge cases (invalid/delisted/non-US), field normalization, Finnhub-only paths   |
-| `test_news_agent.py`           | 33    | RSS parsing, retries, Finnhub fallback, UTC dates, schema validation, hostile sentiment          |
-| `test_risk_agent.py`           | 14    | Deterministic rules (boundaries, None-safety), LLM narrative, score-preserving fallback          |
+| `test_news_agent.py`           | 36    | RSS parsing, retries, Finnhub fallback, article shaping, UTC dates, schema validation, hostile sentiment |
+| `test_risk_agent.py`           | 17    | Deterministic rules (boundaries, None-safety), LLM narrative, score-preserving fallback, rule IDs |
 | `test_synthesis_agent.py`      | 6     | Label logic (boundaries), programmatic override, malformed JSON fallback                         |
 | `test_company_search.py`       | 34    | Ranking, free-tier gating, cache self-heal, normalizers, `/search` endpoint validation          |
-| `test_pipeline_integration.py` | 15    | E2E pipeline, recommendation logic, error accumulation without duplicates, state preservation    |
+| `test_pipeline_integration.py` | 18    | E2E pipeline, recommendation logic, error accumulation without duplicates, timing channels, state preservation |
 
 
-**Total: 122 tests, 100% pass rate**
+**Total: 131 tests, 100% pass rate**
 
 > `conftest.py` enables mock mode session-wide (`USE_MOCK_DATA` + `_TEST_MODE_OVERRIDE`),
 > but `test_pipeline_integration.py` still exercises live Gemini/RSS calls (~2 min).

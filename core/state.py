@@ -1,9 +1,14 @@
-from typing import Annotated, List, Optional, TypedDict
+from typing import Annotated, Dict, List, Optional, TypedDict
 
 
 def _errors_reducer(left: List[str], right: List[str]) -> List[str]:
     """Reducer that accumulates errors from all agents."""
     return left + right
+
+
+def _timings_reducer(left: Dict[str, float], right: Dict[str, float]) -> Dict[str, float]:
+    """Reducer that merges per-agent wall-clock timings (later keys win)."""
+    return {**left, **right}
 
 
 class FinancialData(TypedDict, total=False):
@@ -20,18 +25,32 @@ class FinancialData(TypedDict, total=False):
     revenue_growth: Optional[float]
 
 
+class NewsArticle(TypedDict):
+    title: str
+    url: str
+    source: str
+
+
 class NewsData(TypedDict):
     news_available: bool
     sentiment_score: float
     key_events: List[str]
     red_flags: List[str]
     summary: str
+    articles: List[NewsArticle]
+
+
+class RiskDetail(TypedDict):
+    id: str
+    label: str
+    explanation: str
 
 
 class RiskData(TypedDict):
     risk_score: float
     risk_factors: List[str]
     risk_narrative: str
+    risk_details: List[RiskDetail]
 
 
 class SynthesisBrief(TypedDict):
@@ -52,6 +71,7 @@ class SystemState(TypedDict):
     synthesis_report: SynthesisBrief
     confidence_score: float
     errors: Annotated[List[str], _errors_reducer]
+    timings: Annotated[Dict[str, float], _timings_reducer]
 
 
 def init_state(ticker: str) -> SystemState:
@@ -80,11 +100,13 @@ def init_state(ticker: str) -> SystemState:
             "key_events": [],
             "red_flags": [],
             "summary": "",
+            "articles": [],
         },
         "risk_data": {
             "risk_score": 0.0,
             "risk_factors": [],
             "risk_narrative": "",
+            "risk_details": [],
         },
         "synthesis_report": {
             "company_snapshot": "",
@@ -96,6 +118,7 @@ def init_state(ticker: str) -> SystemState:
         },
         "confidence_score": 1.0,
         "errors": [],
+        "timings": {},
     }
 
 
@@ -103,5 +126,7 @@ def init_state(ticker: str) -> SystemState:
 State = SystemState
 FinancialData = FinancialData
 NewsData = NewsData
+NewsArticle = NewsArticle
 RiskData = RiskData
+RiskDetail = RiskDetail
 SynthesisBrief = SynthesisBrief

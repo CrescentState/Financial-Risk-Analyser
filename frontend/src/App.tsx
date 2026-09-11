@@ -1,17 +1,26 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Info } from 'lucide-react';
 import { Header } from './components/Header';
-import { MetricsCards } from './components/MetricsCards';
+import { MetricsCards, SkeletonLedger } from './components/MetricsCards';
 import { RiskGauge } from './components/RiskGauge';
 import { NewsSentiment } from './components/NewsSentiment';
 import { SynthesisBrief } from './components/SynthesisBrief';
-import { PipelineStatus } from './components/PipelineStatus';
+import { PipelineTrace } from './components/PipelineTrace';
 import { ErrorAlert } from './components/ErrorAlert';
 import { DegradedAlert } from './components/DegradedAlert';
 import { analyzeTicker, searchCompanies } from './services/api';
 import { isInternationalTicker } from './utils/tickers';
 import type { PipelineResult, SearchCandidate } from './types';
-import { RECOMMENDATION_COLORS, getConfidenceColor, getConfidenceLabel } from './utils/formatters';
+import {
+  getConfidenceLabel,
+  getConfidenceSentence,
+  getRecommendationBlurb,
+  getRecommendationTone,
+  getRiskColor,
+  getRiskLevel,
+  getRiskTone,
+  getVerdictLine,
+} from './utils/formatters';
 import './App.css';
 
 // Mirrors the backend TICKER_PATTERN (case-insensitive here; uppercased before use)
@@ -29,6 +38,14 @@ function App() {
   const [searching, setSearching] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const searchRequestId = useRef(0);
+  // Layer-3 analyst detail: collapsed by default, persisted, toggled with `d`.
+  const [analystOpen, setAnalystOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('chrimatos-analyst-open') === '1';
+    } catch {
+      return false;
+    }
+  });
   // Mirror of `loading` for use inside callbacks/effects without retriggering them
   const loadingRef = useRef(loading);
   useEffect(() => {
@@ -49,6 +66,27 @@ function App() {
     const interval = setInterval(fetchHealth, 30000);
     return () => clearInterval(interval);
   }, [fetchHealth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('chrimatos-analyst-open', analystOpen ? '1' : '0');
+    } catch {
+      // storage unavailable (private mode) - preference simply won't persist
+    }
+  }, [analystOpen]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'd' && e.key !== 'D') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      setAnalystOpen((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Refreshes candidates only; opening the dropdown is an explicit,
   // user-driven action (typing, Enter on a name, input focus) so background
@@ -164,7 +202,9 @@ function App() {
 
       <main className="main-content">
         {error && <ErrorAlert message={error} onDismiss={() => setError(null)} />}
-        
+
+        {loading && <SkeletonLedger />}
+
         {result && (
           <>
             <DegradedAlert 
@@ -172,23 +212,59 @@ function App() {
               errors={result.errors} 
             />
             
-            <div className="header-row">
-              <div className="ticker-info">
-                <h1>{result.ticker} — {result.company_name}</h1>
+            <div
+              className="hero"
+              style={{
+                background: `color-mix(in srgb, ${getRiskColor(result.risk_data.risk_score)} 7%, var(--paper))`,
+              }}
+            >
+              <div className="hero-main">
+                <div className="ticker-hero mono">{result.ticker}</div>
+                <div className="company-sub">{result.company_name}</div>
+                <p className="verdict-line">
+                  {getVerdictLine(
+                    result.risk_data.risk_score,
+                    result.confidence_score,
+                    result.risk_data.risk_factors.length,
+                    result.synthesis_report.analyst_recommendation,
+                  )}
+                </p>
+                <button
+                  className="analyst-toggle"
+                  onClick={() => setAnalystOpen((v) => !v)}
+                  aria-expanded={analystOpen}
+                  title="Keyboard shortcut: d"
+                >
+                  {analystOpen ? 'Hide analyst detail ▾' : 'Show analyst detail ▸'}
+                </button>
               </div>
-              <div className="confidence-badge" style={{ backgroundColor: getConfidenceColor(result.confidence_score) }}>
-                {getConfidenceLabel(result.confidence_score)} ({Math.round(result.confidence_score * 100)}%)
-              </div>
-              <div className="recommendation-badge" style={{ backgroundColor: RECOMMENDATION_COLORS[result.synthesis_report.analyst_recommendation] }}>
-                {result.synthesis_report.analyst_recommendation}
+              <div className="hero-side">
+                <span className={`risk-tag tone-${getRiskTone(result.risk_data.risk_score)}`}>
+                  {getRiskLevel(result.risk_data.risk_score)}
+                </span>
+                <div className="hero-meta mono">
+                  score {result.risk_data.risk_score.toFixed(0)}/100 ·{' '}
+                  {getConfidenceSentence(result.confidence_score, result.errors.length)}
+                </div>
+                <div className="hero-rec">
+                  <span className={`hero-rec-label tone-${getRecommendationTone(result.synthesis_report.analyst_recommendation)}`}>
+                    {result.synthesis_report.analyst_recommendation}
+                  </span>
+                  <span className="hero-rec-blurb">
+                    {getRecommendationBlurb(result.synthesis_report.analyst_recommendation)} ·{' '}
+                    {getConfidenceLabel(result.confidence_score)}
+                  </span>
+                </div>
               </div>
             </div>
+            <hr className="rule-strong hero-rule" />
 
-            <PipelineStatus 
-              financial={result.financial_data.data_available ? 'available' : 'unavailable'}
-              news={result.news_data.news_available ? 'available' : 'unavailable'}
-              risk="complete"
-              synthesis="complete"
+            <PipelineTrace
+              timings={result.timings ?? {}}
+              degraded={{
+                financial: !result.financial_data.data_available,
+                news: !result.news_data.news_available,
+              }}
             />
 
             <div className="tabs">
@@ -199,7 +275,7 @@ function App() {
                   aria-selected={activeTab === 0}
                   onClick={() => setActiveTab(0)}
                 >
-                  📊 Financial Metrics
+                  Financial Metrics
                 </button>
                 <button 
                   role="tab" 
@@ -207,7 +283,7 @@ function App() {
                   aria-selected={activeTab === 1}
                   onClick={() => setActiveTab(1)}
                 >
-                  ⚠️ Risk Analysis
+                  Risk Analysis
                 </button>
                 <button 
                   role="tab" 
@@ -215,7 +291,7 @@ function App() {
                   aria-selected={activeTab === 2}
                   onClick={() => setActiveTab(2)}
                 >
-                  📰 News & Sentiment
+                  News & Sentiment
                 </button>
                 <button 
                   role="tab" 
@@ -223,7 +299,7 @@ function App() {
                   aria-selected={activeTab === 3}
                   onClick={() => setActiveTab(3)}
                 >
-                  📋 Synthesis Brief
+                  Synthesis Brief
                 </button>
                 <button 
                   role="tab" 
@@ -231,16 +307,16 @@ function App() {
                   aria-selected={activeTab === 4}
                   onClick={() => setActiveTab(4)}
                 >
-                  🔍 Debug / Raw Data
+                  Debug / Raw Data
                 </button>
               </div>
 
               <div className="tab-panels">
                 <div className={`tab-panel ${activeTab === 0 ? 'active' : ''}`}>
-                  <MetricsCards data={result.financial_data} />
+                  <MetricsCards data={result.financial_data} analystOpen={analystOpen} />
                 </div>
                 <div className={`tab-panel ${activeTab === 1 ? 'active' : ''}`}>
-                  <RiskGauge data={result.risk_data} />
+                  <RiskGauge data={result.risk_data} analystOpen={analystOpen} />
                 </div>
                 <div className={`tab-panel ${activeTab === 2 ? 'active' : ''}`}>
                   <NewsSentiment data={result.news_data} />

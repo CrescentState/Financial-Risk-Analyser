@@ -81,11 +81,23 @@ def _is_rss_retryable(exc: Exception) -> bool:
     return isinstance(exc, httpx.TransportError)
 
 
+def _split_google_title(raw_title: str) -> tuple[str, str]:
+    """Split Google News RSS titles shaped as "Headline - Outlet" into (title, source)."""
+    text = (raw_title or "").strip() or "No Title"
+    if " - " in text:
+        title, source = text.rsplit(" - ", 1)
+        title, source = title.strip(), source.strip()
+        if title and source:
+            return title, source
+    return text, "Unknown"
+
+
 async def _fetch_finnhub_company_news(ticker: str) -> list[dict]:
     """Finnhub company-news fallback shaped like RSS articles.
 
-    Returns [{title, summary}] bounded to MAX_NEWS_ARTICLES, or [] when
-    unavailable. Never raises - the caller records a fallback note instead.
+    Returns [{title, summary, url, source}] bounded to MAX_NEWS_ARTICLES,
+    or [] when unavailable. Never raises - the caller records a fallback
+    note instead.
     """
     try:
         from core.clients import finnhub_company_news
@@ -105,7 +117,12 @@ async def _fetch_finnhub_company_news(ticker: str) -> list[dict]:
             continue
         title = item.get("headline") or "No Title"
         summary = _clean_html_text(item.get("summary") or "") or "No Summary Available"
-        articles.append({"title": title, "summary": summary})
+        articles.append({
+            "title": title,
+            "summary": summary,
+            "url": item.get("url") or "",
+            "source": (item.get("source") or "Unknown").strip() or "Unknown",
+        })
     return articles[: settings.MAX_NEWS_ARTICLES]
 
 
@@ -119,6 +136,7 @@ async def news_agent_async(state: dict) -> dict:
         "red_flags": [],
         "news_available": True,
         "summary": "",
+        "articles": [],
     }
 
     company_name = state.get("company_name", "").strip()
@@ -218,10 +236,15 @@ async def news_agent_async(state: dict) -> dict:
 
     if not extracted_news:
         for entry in valid_entries[:settings.MAX_NEWS_ARTICLES]:
-            title = entry.get("title", "No Title")
+            title, source = _split_google_title(entry.get("title", ""))
             raw_summary = entry.get("summary", "")
             clean_summary = _clean_html_text(raw_summary) or "No Summary Available"
-            extracted_news.append({"title": title, "summary": clean_summary})
+            extracted_news.append({
+                "title": title,
+                "summary": clean_summary,
+                "url": entry.get("link", "") or "",
+                "source": source,
+            })
 
     formatted_articles = ""
     for idx, article in enumerate(extracted_news, 1):
@@ -293,6 +316,18 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
         except Exception as e:
             new_errors.append(f"Gemini sentiment retry attempt failed: {str(e)}")
 
+    # Article rows for the terminal UI (factual fetch results - kept even
+    # when sentiment extraction fails so headlines are never lost)
+    article_rows = [
+        {
+            "title": a.get("title", "No Title"),
+            "summary": a.get("summary", ""),
+            "url": a.get("url", ""),
+            "source": a.get("source", "Unknown"),
+        }
+        for a in extracted_news
+    ]
+
     # Fallback assignment
     if not validation_passed:
         new_errors.append("News sentiment validation failed completely. Degraded state recorded.")
@@ -302,6 +337,7 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
             "red_flags": [],
             "news_available": False,
             "summary": "",
+            "articles": article_rows,
         })
     else:
         news_data.update({
@@ -310,6 +346,7 @@ CRITICAL: Output raw JSON strictly matching the field requirements:
             "red_flags": sentiment_payload["red_flags"],
             "news_available": True,
             "summary": sentiment_payload["summary"],
+            "articles": article_rows,
         })
 
     score = news_data.get("sentiment_score")

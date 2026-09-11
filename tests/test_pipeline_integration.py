@@ -27,6 +27,10 @@ class TestPipelineIntegration:
         assert "news_data" in result
         assert "risk_data" in result
         assert "synthesis_report" in result
+        # Every node records its wall-clock seconds (parallel and sequential
+        # modes expose the same keys)
+        assert {"financial", "news", "risk", "synthesis"} <= set(result["timings"])
+        assert all(isinstance(v, float) and v >= 0 for v in result["timings"].values())
 
     def test_pipeline_financial_data_populated(self):
         """Test that financial data is properly populated."""
@@ -289,6 +293,40 @@ class TestPipelineRecommendationLogic:
             "financial_data": {"yoy_revenue_growth": 0.10},
         }
         assert _compute_recommendation(state) == "Neutral"
+
+
+class TestOrchestratorTiming:
+    """Timing instrumentation without live network calls."""
+
+    def test_timings_reducer_merges(self):
+        from core.state import _timings_reducer
+        assert _timings_reducer({"a": 1.0}, {"b": 2.0}) == {"a": 1.0, "b": 2.0}
+        assert _timings_reducer({"a": 1.0}, {"a": 2.0}) == {"a": 2.0}
+
+    def test_merge_timing_records_duration(self):
+        from core.orchestrator import _merge_timing
+        out = _merge_timing({"timings": {"financial": 0.5}}, {"risk_data": {}}, "risk", 1.234)
+        assert out["timings"] == {"financial": 0.5, "risk": 1.23}
+        assert out["risk_data"] == {}
+
+    def test_timed_wrappers_record(self):
+        import asyncio
+        from core.orchestrator import _timed_sync, _timed_async
+
+        def fn(state):
+            return {"x": 1}
+
+        out = _timed_sync("financial", fn)({"timings": {}})
+        assert out["x"] == 1
+        assert out["timings"]["financial"] >= 0
+
+        async def afn(state):
+            return {"y": 2}
+
+        out2 = asyncio.run(_timed_async("news", afn)({"timings": {"financial": 0.1}}))
+        assert out2["y"] == 2
+        assert out2["timings"]["financial"] == 0.1
+        assert out2["timings"]["news"] >= 0
 
 
 if __name__ == "__main__":

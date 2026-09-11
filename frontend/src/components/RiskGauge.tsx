@@ -1,134 +1,149 @@
-import { useMemo } from 'react';
-import Plot from 'react-plotly.js';
-import type { RiskData } from '../types';
+import { useEffect, useState } from 'react';
+import type { RiskData, RiskDetail } from '../types';
+import { getRiskColor, getRiskLevel, getRiskTone } from '../utils/formatters';
 import './RiskGauge.css';
 
 interface RiskGaugeProps {
   data: RiskData;
+  analystOpen: boolean;
 }
 
-const GAUGE_COLORS = {
-  low: '#00C851',
-  moderate: '#FFBB33',    // Amber for moderate (matches badge)
-  elevated: '#FF8800',    // Orange for elevated
-  high: '#FF4444',
-};
+const CX = 100;
+const CY = 100;
+const R = 78;
 
-const GAUGE_STEP_COLORS = {
-  low: 'rgba(0, 200, 81, 0.25)',
-  moderate: 'rgba(255, 187, 51, 0.25)',
-  elevated: 'rgba(255, 136, 0, 0.25)',
-  high: 'rgba(255, 68, 68, 0.25)',
-};
-
-function getGaugeColor(score: number): string {
-  if (score <= 20) return GAUGE_COLORS.low;
-  if (score <= 45) return GAUGE_COLORS.moderate;
-  if (score <= 70) return GAUGE_COLORS.elevated;
-  return GAUGE_COLORS.high;
+function polar(score: number, radius: number): [number, number] {
+  const angle = ((180 - (Math.max(0, Math.min(100, score)) / 100) * 180) * Math.PI) / 180;
+  return [CX + radius * Math.cos(angle), CY - radius * Math.sin(angle)];
 }
 
-function getRiskLevel(score: number): string {
-  if (score <= 20) return 'Low Risk';
-  if (score <= 45) return 'Moderate Risk';
-  if (score <= 70) return 'Elevated Risk';
-  return 'High Risk';
+function bandPath(from: number, to: number): string {
+  const [x0, y0] = polar(from, R);
+  const [x1, y1] = polar(to, R);
+  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${R} ${R} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
 }
 
-const layout = {
-  height: 300,
-  margin: { l: 30, r: 30, t: 50, b: 40 },  // Increased margins for tick labels
-  paper_bgcolor: 'white',
-  font: { family: 'Inter, system-ui, sans-serif' },
-};
+const BANDS: Array<{ from: number; to: number; color: string }> = [
+  { from: 0, to: 20, color: 'var(--risk-low)' },
+  { from: 20, to: 45, color: 'var(--risk-moderate)' },
+  { from: 45, to: 70, color: 'var(--risk-elevated)' },
+  { from: 70, to: 100, color: 'var(--risk-high)' },
+];
 
-export function RiskGauge({ data }: RiskGaugeProps) {
+const TICKS = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+function useSweptScore(score: number): number {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setShown(score);
+      return;
+    }
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - t0) / 600);
+      setShown(score * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [score]);
+  return shown;
+}
+
+export function RiskGauge({ data, analystOpen }: RiskGaugeProps) {
   const score = data.risk_score ?? 0;
-  const color = getGaugeColor(score);
+  const color = getRiskColor(score);
   const level = getRiskLevel(score);
+  const shown = useSweptScore(score);
+  const [nx, ny] = polar(shown, R - 18);
 
-  // Create gauge data fresh each render
-  const gaugeData = useMemo(() => [{
-    type: 'indicator' as const,
-    mode: 'gauge+number' as const,
-    value: score,
-    domain: { x: [0, 1], y: [0, 1] },
-    title: { text: 'Risk Score', font: { size: 16, color: '#374151' } },
-    number: { font: { size: 36, color: color, family: 'Inter, system-ui, sans-serif' } },
-    gauge: {
-      axis: { 
-        range: [0, 100], 
-        tickwidth: 1, 
-        tickcolor: '#9ca3af',
-        tickmode: 'linear' as const,
-        tick0: 0,
-        dtick: 20,
-        tickfont: { size: 11, color: '#6b7280' },
-      },
-      bar: { color, thickness: 0.35 },
-      bgcolor: 'white',
-      borderwidth: 2,
-      bordercolor: '#e5e7eb',
-      steps: [
-        { range: [0, 20], color: GAUGE_STEP_COLORS.low },
-        { range: [20, 45], color: GAUGE_STEP_COLORS.moderate },
-        { range: [45, 70], color: GAUGE_STEP_COLORS.elevated },
-        { range: [70, 100], color: GAUGE_STEP_COLORS.high },
-      ],
-      // Threshold at high-risk zone (70) - not at current score
-      threshold: {
-        line: { color: '#FF4444', width: 3, dash: 'dash' },
-        thickness: 0.75,
-        value: 70,
-      },
-    },
-  }], [score, color]);
+  const details: RiskDetail[] =
+    data.risk_details && data.risk_details.length > 0
+      ? data.risk_details
+      : (data.risk_factors ?? []).map((f) => ({
+          id: 'R-–',
+          label: f,
+          explanation: 'Flagged by the risk engine.',
+        }));
 
   return (
     <div className="risk-gauge-container">
-      <div className="gauge-header">
-        <h2>Risk Analysis</h2>
-        <div className="risk-level" style={{ backgroundColor: color }}>
-          {level} — {score.toFixed(1)}/100
+      <div className="gauge-top">
+        <svg
+          className="gauge-svg"
+          viewBox="0 0 200 118"
+          role="img"
+          aria-label={`Risk score ${score.toFixed(0)} out of 100, ${level}`}
+        >
+          <path d={bandPath(0, 100)} fill="none" stroke="var(--rule)" strokeWidth="8" />
+          {BANDS.map((b) => (
+            <path
+              key={`${b.from}-${b.to}`}
+              d={bandPath(b.from, b.to)}
+              fill="none"
+              stroke={b.color}
+              strokeWidth="8"
+            />
+          ))}
+          {TICKS.map((t) => {
+            const [x0, y0] = polar(t, R - 12);
+            const [x1, y1] = polar(t, R - 6);
+            return (
+              <line key={t} x1={x0} y1={y0} x2={x1} y2={y1} stroke="var(--ink-3)" strokeWidth="1" />
+            );
+          })}
+          <line x1={CX} y1={CY} x2={nx} y2={ny} stroke="var(--ink)" strokeWidth="2.5" strokeLinecap="round" />
+          <circle cx={CX} cy={CY} r="4" fill="var(--ink)" />
+          <text x="22" y="116" textAnchor="middle" className="gauge-tick-label">0</text>
+          <text x="100" y="116" textAnchor="middle" className="gauge-tick-label">50</text>
+          <text x="178" y="116" textAnchor="middle" className="gauge-tick-label">100</text>
+        </svg>
+        <div className="gauge-readout">
+          <div className="gauge-score mono" style={{ color }}>
+            {shown.toFixed(0)}
+          </div>
+          <div className="gauge-scale mono">/100</div>
+          <span className={`risk-tag tone-${getRiskTone(score)}`}>
+            {level}
+          </span>
         </div>
       </div>
 
-      <div className="gauge-layout">
-        <div className="gauge-chart">
-          <Plot
-            data={gaugeData}
-            layout={layout}
-            config={{ displayModeBar: false, responsive: true }}
-            useResizeHandler
-          />
-        </div>
-
-        <div className="risk-details">
-          <div className="risk-section">
-            <h3>Risk Factors</h3>
-            {data.risk_factors && data.risk_factors.length > 0 ? (
-              <ul className="risk-factors">
-                {data.risk_factors.map((factor, i) => (
-                  <li key={i}>
-                    <span className="factor-dot" />
-                    <span>{factor}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="no-factors">No risk factors triggered</p>
-            )}
+      <div className="risk-section">
+        <div className="section-label">Rules triggered ({details.length})</div>
+        {!analystOpen && details.length > 0 ? (
+          <p className="rules-count">
+            {details.length === 1
+              ? '1 caution check triggered — show analyst detail to inspect it.'
+              : `${details.length} caution checks triggered — show analyst detail to inspect them.`}
+          </p>
+        ) : details.length > 0 ? (
+          <div className="rules-list">
+            {details.map((d) => (
+              <details key={d.id} className="rule-row">
+                <summary>
+                  <span className="rule-id mono">{d.id}</span>
+                  <span className="rule-label">{d.label}</span>
+                  <span className="rule-status">triggered</span>
+                </summary>
+                <p className="rule-explanation">{d.explanation}</p>
+              </details>
+            ))}
           </div>
+        ) : (
+          <p className="no-factors">No risk factors triggered</p>
+        )}
+      </div>
 
-          <div className="risk-section">
-            <h3>Risk Narrative</h3>
-            <p className="risk-narrative">{data.risk_narrative || 'No narrative available'}</p>
-          </div>
-        </div>
+      <div className="risk-section">
+        <div className="section-label">Risk narrative</div>
+        <p className="risk-narrative">{data.risk_narrative || 'No narrative available'}</p>
       </div>
 
       <details className="raw-data-toggle">
-        <summary>🔍 Raw Risk Data</summary>
+        <summary>Raw Risk Data</summary>
         <pre className="raw-data">{JSON.stringify(data, null, 2)}</pre>
       </details>
     </div>

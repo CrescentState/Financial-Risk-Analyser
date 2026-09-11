@@ -18,12 +18,27 @@ export interface NewsData {
   red_flags: string[];
   news_available: boolean;
   summary: string;
+  articles: NewsArticle[];
+}
+
+export interface RiskDetail {
+  id: string;
+  label: string;
+  explanation: string;
 }
 
 export interface RiskData {
   risk_score: number;
   risk_factors: string[];
   risk_narrative: string;
+  risk_details: RiskDetail[];
+}
+
+export interface NewsArticle {
+  title: string;
+  summary: string;
+  url: string;
+  source: string;
 }
 
 export interface SynthesisReport {
@@ -50,13 +65,7 @@ export interface PipelineResult {
   news_data: NewsData;
   risk_data: RiskData;
   synthesis_report: SynthesisReport;
-}
-
-export interface PipelineStatus {
-  financial: 'available' | 'unavailable';
-  news: 'available' | 'unavailable';
-  risk: 'complete' | 'incomplete';
-  synthesis: 'complete' | 'incomplete';
+  timings: Record<string, number>;
 }
 
 export interface SearchCandidate {

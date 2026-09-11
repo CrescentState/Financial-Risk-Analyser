@@ -319,5 +319,47 @@ def test_risk_agent_prompt_includes_financial_data(mock_generate_content):
     assert "1.5" in prompt
 
 
+def test_describe_risk_factors_ids_and_explanations():
+    """Structured details carry stable IDs and plain-English explanations."""
+    from agents.risk_agent import describe_risk_factors
+    factors = [
+        "High Leverage (D/E > 2.5)",
+        "Negative Shareholder Equity (Balance Sheet Distress)",
+        "Revenue Contraction (-15.00%)",
+        "Unprofitable / Negative P/E",
+        "Hostile Media Coverage",
+    ]
+    details = describe_risk_factors(factors)
+    assert [d["id"] for d in details] == ["R-01", "R-02", "R-03", "R-04", "R-05"]
+    assert all(d["label"] and d["explanation"] for d in details)
+    assert "-15.00%" in details[2]["explanation"]
+
+
+def test_describe_risk_factors_empty_and_unknown():
+    from agents.risk_agent import describe_risk_factors
+    assert describe_risk_factors([]) == []
+    details = describe_risk_factors(["Something Weird"])
+    assert details[0]["id"] == "R-00"
+    assert details[0]["label"] == "Something Weird"
+
+
+@patch("agents.risk_agent.get_gemini_client")
+def test_risk_agent_includes_risk_details(mock_generate_content):
+    """risk_data carries structured details alongside legacy string factors."""
+    state = init_state("TEST")
+    state["financial_data"].update({"debt_to_equity": 3.5})
+    state["news_data"] = {"sentiment_score": 0.0, "news_available": True, "key_events": [], "red_flags": [], "summary": ""}
+
+    mock_generate_content.return_value.models.generate_content.return_value = MagicMock(
+        text=json.dumps({"risk_narrative": "Leveraged."})
+    )
+    res_state = risk_agent(state)
+
+    assert res_state["risk_data"]["risk_factors"] == ["High Leverage (D/E > 2.5)"]
+    details = res_state["risk_data"]["risk_details"]
+    assert details[0]["id"] == "R-01"
+    assert "2.5" in details[0]["explanation"]
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

@@ -1,6 +1,47 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
+/* Chrimatos terminal identity: ink-on-paper neutrals, one editorial red,
+   tabular mono figures. See design doc §3 for the token rationale. */
 :root {
+  /* Ink-on-paper neutrals */
+  --paper: #FAFAF7;
+  --paper-darken: #F1EFE9;
+  --ink: #0D0D0D;
+  --ink-2: #44403C;
+  --ink-3: #78716C;
+  --rule: #E7E5E0;
+  --rule-strong: #0D0D0D;
+
+  /* The ONE accent: editorial red, risk/danger only */
+  --accent: #B91C1C;
+
+  /* Interactive blue — navigation/clickability cues ONLY (links, active tab).
+     Never for status: status belongs to the risk ramp. ~7:1 on paper. */
+  --interactive: #1D4ED8;
+
+  /* Soft status tints (12%) for chips and washes — never solid pastels */
+  --tint-low: rgba(21, 128, 61, 0.12);
+  --tint-moderate: rgba(161, 98, 7, 0.12);
+  --tint-elevated: rgba(194, 65, 12, 0.12);
+  --tint-high: rgba(185, 28, 28, 0.12);
+  --tint-info: rgba(29, 78, 216, 0.12);
+
+  /* Risk scale (single-hue ramp) */
+  --risk-low: #15803D;
+  --risk-moderate: #A16207;
+  --risk-elevated: #C2410C;
+  --risk-high: #B91C1C;
+
+  /* Type */
+  --font-sans: "IBM Plex Sans", "Inter", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Editorial type scale */
+  --fs-hero: 2.75rem;
+  --fs-section: 0.75rem;
+  --fs-metric: 1.375rem;
+  --fs-body: 0.9375rem;
+  --fs-small: 0.8125rem;
+
+  /* Legacy aliases (being phased out component by component) */
   --color-primary: #1e3a8a;
   --color-primary-light: #1e40af;
   --color-success: #00C851;
@@ -27,10 +68,11 @@ html {
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  line-height: 1.5;
+  font-family: var(--font-sans);
+  background-color: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+  font-size: var(--fs-body);
   min-height: 100vh;
 }
 
@@ -38,13 +80,20 @@ body {
   min-height: 100vh;
 }
 
+/* Figures, tickers, dates, scores: mono, tabular, never reflow */
+.mono,
+.tnum {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 ::selection {
-  background-color: var(--color-primary);
-  color: white;
+  background-color: var(--ink);
+  color: var(--paper);
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -54,14 +103,109 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-bg);
+  background: var(--paper);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-muted);
+  background: var(--ink-3);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-secondary);
+  background: var(--ink-2);
+}
+
+/* Shared editorial primitives */
+.section-label {
+  font-size: var(--fs-section);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+.rule {
+  border: none;
+  border-top: 1px solid var(--rule);
+}
+
+.rule-strong {
+  border: none;
+  border-top: 2px solid var(--rule-strong);
+}
+
+/* Risk text label with 2px left border (FT/newspaper style) */
+.risk-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.25rem 0 0.25rem 0.5rem;
+  border-left: 2px solid currentColor;
+}
+
+/* Status tone chips: colored text on a soft wash of the same hue */
+.tone-low,
+.tone-moderate,
+.tone-elevated,
+.tone-high,
+.tone-info {
+  border-radius: 2px;
+  padding: 0.125rem 0.5rem;
+}
+.tone-low { color: var(--risk-low); background: var(--tint-low); }
+.tone-moderate { color: var(--risk-moderate); background: var(--tint-moderate); }
+.tone-elevated { color: var(--risk-elevated); background: var(--tint-elevated); }
+.tone-high { color: var(--risk-high); background: var(--tint-high); }
+.tone-info { color: var(--interactive); background: var(--tint-info); }
+
+/* Skeleton ledger rows for loading states */
+.skeleton-row {
+  height: 1.375rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--rule) 25%, var(--paper-darken) 50%, var(--rule) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* The brief prints as a clean research note */
+@media print {
+  .header,
+  .tab-buttons,
+  .search-box,
+  .analyze-btn,
+  .raw-data-toggle,
+  .suggestions-dropdown {
+    display: none !important;
+  }
+  body {
+    background: white;
+    font-size: 12pt;
+  }
+  .tab-panel {
+    display: block !important;
+  }
+  /* Tints wash out on paper — keep text color, drop backgrounds */
+  .risk-tag,
+  .hero,
+  .gauge-score,
+  .warning-banner {
+    background: transparent !important;
+  }
 }
