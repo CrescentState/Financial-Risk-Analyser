@@ -326,9 +326,11 @@ Sans/Mono, metric ledger with group verdicts, rule list with stable IDs
 (`R-01`…`R-05`) and plain-English explanations, verdict-first hero with a
 plain-language one-liner. Color is disciplined: the risk ramp carries status,
 directional green/red marks signed figures, and one interactive blue
-(`--interactive`) marks links/active tab only. Analyst depth (ledger, trace,
-raw JSON) and normal-user guidance (verdicts, explanations, humanized empty
-states) come from the same data — see `Chrimatos UI Design Document.md`.
+(`--interactive`) marks links/active tab only. Dark mode follows the OS setting
+by default with a header toggle (persisted in `localStorage`); print output
+always renders light. Analyst depth (ledger, trace, raw JSON) and
+normal-user guidance (verdicts, explanations, humanized empty states) come
+from the same data — see `Chrimatos UI Design Document.md`.
 
 New API fields (all additive, backward compatible): per-agent `timings`
 (`financial`, `news`, `risk`, `synthesis` seconds), `risk_details`

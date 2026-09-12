@@ -329,5 +329,28 @@ class TestOrchestratorTiming:
         assert out2["timings"]["news"] >= 0
 
 
+class TestAnalysisResponseTimings:
+    """timings computed by the pipeline must survive API serialization."""
+
+    def test_timings_present_in_analyze_response(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import AsyncMock, patch
+        from api.routes import router
+
+        app = FastAPI()
+        app.include_router(router)
+
+        state = init_state("AAPL")
+        state["timings"] = {"financial": 1.2, "news": 0.8, "risk": 0.1, "synthesis": 0.4}
+        with patch("api.routes.run_pipeline_async", new=AsyncMock(return_value=state)):
+            resp = TestClient(app).post("/api/v1/analyze/AAPL")
+
+        assert resp.status_code == 200
+        assert resp.json()["timings"] == {
+            "financial": 1.2, "news": 0.8, "risk": 0.1, "synthesis": 0.4,
+        }
+
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

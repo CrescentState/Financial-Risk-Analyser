@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Search, Loader2, CheckCircle, AlertCircle, Server } from 'lucide-react';
 import type { SearchCandidate } from '../types';
+import { ThemeToggle } from './ThemeToggle';
 import './Header.css';
 
 interface HeaderProps {
@@ -175,6 +176,7 @@ export function Header({
       </div>
 
       <div className="header-right">
+        <ThemeToggle />
         <div className={`health-indicator ${backendHealthy ? 'healthy' : 'unhealthy'}`}>
           <span className="health-dot" />
           <span>{backendHealthy ? 'Backend Connected' : 'Backend Disconnected'}</span>

@@ -19,6 +19,7 @@ class AnalysisResponse(BaseModel):
     news_data: dict
     risk_data: dict
     synthesis_report: dict
+    timings: dict = {}
 
 
 class HealthCheckResponse(BaseModel):
@@ -112,6 +113,7 @@ async def analyze_ticker(ticker: str):
             news_data=result["news_data"],
             risk_data=result["risk_data"],
             synthesis_report=result["synthesis_report"],
+            timings=result.get("timings", {}),
         )
     except HTTPException:
         raise

@@ -160,6 +160,25 @@ body {
 .tone-high { color: var(--risk-high); background: var(--tint-high); }
 .tone-info { color: var(--interactive); background: var(--tint-info); }
 
+/* Dark terminal: warm dark surfaces, lifted hues for contrast on dark.
+   Alpha tints carry over unchanged. */
+[data-theme="dark"] {
+  --paper: #171512;
+  --paper-darken: #232019;
+  --ink: #EDEAE3;
+  --ink-2: #C9C4B8;
+  --ink-3: #8A8478;
+  --rule: #2E2B25;
+  --rule-strong: #EDEAE3;
+  --accent: #E5484D;
+  --risk-low: #3FB950;
+  --risk-moderate: #D29922;
+  --risk-elevated: #DB6D28;
+  --risk-high: #F85149;
+  --interactive: #6EA8FE;
+  color-scheme: dark;
+}
+
 /* Skeleton ledger rows for loading states */
 .skeleton-row {
   height: 1.375rem;
@@ -184,8 +203,25 @@ body {
   }
 }
 
-/* The brief prints as a clean research note */
+/* The brief prints as a clean research note - always light, tints off */
 @media print {
+  :root,
+  [data-theme="dark"] {
+    --paper: #FAFAF7;
+    --paper-darken: #F1EFE9;
+    --ink: #0D0D0D;
+    --ink-2: #44403C;
+    --ink-3: #78716C;
+    --rule: #E7E5E0;
+    --rule-strong: #0D0D0D;
+    --accent: #B91C1C;
+    --risk-low: #15803D;
+    --risk-moderate: #A16207;
+    --risk-elevated: #C2410C;
+    --risk-high: #B91C1C;
+    --interactive: #1D4ED8;
+    color-scheme: light;
+  }
   .header,
   .tab-buttons,
   .search-box,

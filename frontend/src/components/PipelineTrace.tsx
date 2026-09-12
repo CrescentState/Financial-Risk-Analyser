@@ -27,7 +27,7 @@ export function PipelineTrace({ timings, degraded }: PipelineTraceProps) {
     <details className="pipeline-trace">
       <summary>
         <span className="section-label">Pipeline trace</span>
-        <span className="trace-line mono" title="Per-agent wall-clock seconds">
+        <span className="trace-line mono" title="Per-agent wall-clock seconds (financial + news run in parallel)">
           {line} · {total.toFixed(1)}s
         </span>
       </summary>
